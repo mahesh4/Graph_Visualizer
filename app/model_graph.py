@@ -1,20 +1,15 @@
-class ModelGraphGenerator:
+from app.path_finder import PathFinder
+from app.db_connect import DBConnect
+
+
+class ModelGraphGenerator(DBConnect):
+
     def __init__(self):
-        self.MONGO_CLIENT = None
-        self.GRAPH_CLIENT = None
+        DBConnect.__init__(self)
         self.MODEL_GRAPH = None
         self.OPTIMAL_PATH = list()
 
-    def connect_db(self, db_connect):
-        self.MONGO_CLIENT = db_connect.MONGO_CLIENT
-        self.GRAPH_CLIENT = db_connect.GRAPH_CLIENT
-
-    def disconnect_db(self):
-        self.MONGO_CLIENT.close()
-        self.GRAPH_CLIENT.close()
-
-    @staticmethod
-    def create_node(dsir):
+    def create_node(self, dsir):
         """Function to convert the DSIR to a  node for the flow_graph_path"""
         node = dict()
         node['name'] = dsir['metadata']['model_type']
@@ -28,15 +23,17 @@ class ModelGraphGenerator:
         ]
         return node
 
-    @staticmethod
-    def get_timeline(path_finder, node_id, node_type='model'):
-        """"""
+    def get_timeline(self, node_id, node_type='model'):
+        """Function to get the timeline for a node. Its done by transpiling the timeline for a particular node in flow graph to
+        a timeline for that node in model graph
+        """
+        path_finder = PathFinder()
         flow_graph_node_timeline = path_finder.get_timeline(node_id, node_type)
         timeline = list()
         # transpiling the flow path to timeline for the node
         for node in flow_graph_node_timeline:
             if node['node_type'] == 'model':
-                timeline.append(node_id)
+                timeline.append(str(node_id))
 
         return timeline
 
@@ -80,7 +77,6 @@ class ModelGraphGenerator:
                             'connectTo': str(dsir_ancestor_2_id),
                             'connectorType': "start-finish"
                         })
-
         return node
 
     def generate_model_graph(self):
@@ -88,73 +84,91 @@ class ModelGraphGenerator:
         default, but the DSIR created by JobGateway undergoes the following sanity checks. We check whether children DSIRs
         are created by PSM or not, if not, then the DSIR becomes a node"""
 
-        graph = list()
+        self.connect_db()
+        try:
+            graph = list()
+            database = self.MONGO_CLIENT['ds_results']
+            dsir_collection = database['dsir']
+            dsir_list = dsir_collection.find()
 
-        database = self.MONGO_CLIENT['ds_results']
-        dsir_collection = database['dsir']
-        dsir_list = dsir_collection.find()
+            for dsir in dsir_list:
 
-        for dsir in dsir_list:
+                # TODO: check if more than a single DSIR exists for a single model on a particular window
 
-            # TODO: check if more than a single DSIR exists for a single model on a particular window
-
-            if dsir['created_by'] == 'JobGateway':
-                # Check if the DSIR is not getting post-processed in PSM by checking the 'created_by' of any of its
-                # children. If the DSIR doesn't have any children
-                if 'children' not in dsir:
-                    node = self.create_node(dsir)
-
-                    # Generating backward edge
-                    if len(dsir['parents']) == 0:
-                        # No edge to insert
-                        graph.append(node)
-                    else:
-                        # Generating backward edge
-                        node = self.insert_edge(dsir, node)
-                        graph.append(node)
-                else:
-                    # fetching a child
-                    dsir_child = dsir_collection.find_one({'_id': dsir['children'][0]})
-
-                    if dsir_child['created_by'] == 'PostSynchronizationManager':
-                        # if the children DSIR is created by PSM, then we don't insert this DSIR
-                        continue
-                    else:
+                if dsir['created_by'] == 'JobGateway':
+                    # Check if the DSIR is not getting post-processed in PSM by checking the 'created_by' of any of its
+                    # children. If the DSIR doesn't have any children
+                    if 'children' not in dsir:
                         node = self.create_node(dsir)
+
                         # Generating backward edge
-                        node = self.insert_edge(dsir, node)
-                        graph.append(node)
+                        if len(dsir['parents']) == 0:
+                            # No edge to insert
+                            graph.append(node)
+                        else:
+                            # Generating backward edge
+                            node = self.insert_edge(dsir, node)
+                            graph.append(node)
+                    else:
+                        # fetching a child
+                        dsir_child = dsir_collection.find_one({'_id': dsir['children'][0]})
 
-            elif dsir['created_by'] == 'PostSynchronizationManager':
-                node = self.create_node(dsir)
-                # Generating backward edge
-                node = self.insert_edge(dsir, node)
-                graph.append(node)
-            # End of loop
+                        if dsir_child['created_by'] == 'PostSynchronizationManager':
+                            # if the children DSIR is created by PSM, then we don't insert this DSIR
+                            continue
+                        else:
+                            node = self.create_node(dsir)
+                            # Generating backward edge
+                            node = self.insert_edge(dsir, node)
+                            graph.append(node)
 
-        self.MODEL_GRAPH = graph
+                elif dsir['created_by'] == 'PostSynchronizationManager':
+                    node = self.create_node(dsir)
+                    # Generating backward edge
+                    node = self.insert_edge(dsir, node)
+                    graph.append(node)
+                # End of loop
+
+            self.MODEL_GRAPH = graph
+
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+        return
 
     def generate_optimal_path(self, model):
         """Function to generate the optimal path for model graph by transpiling the optimal path in the flow graph.
         Its done by taking into consideration of the nodes of type 'model' which are part of the optimal path. These nodes
         are of data-type DSAR, in which the DSIRs wrap around, are the nodes in the model graph"""
+        try:
+            self.connect_db()
+            database = self.MONGO_CLIENT['ds_results']
+            dsar_collection = database['dsar']
+            flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
+            path = list()
+            edge_collection = flow_graph_constraint_database['edge']
+            edge_list = edge_collection.find({'destination.node_type': 'model'})
+            for edge in edge_list:
+                dsar_id = edge['destination']['node_id']
+                # Check if the model is part of the optimal path
+                if model.getVarByName(edge['edge_names'][0]).x == 1:
+                    # Get the DSIR of the model, which serves as a node in model_graph
+                    dsar = dsar_collection.find_one({'_id': dsar_id})
+                    dsir_id_list = dsar['dsir_list']
+                    path.extend(dsir_id_list)
 
-        database = self.MONGO_CLIENT['ds_results']
-        dsar_collection = database['dsar']
-        flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
-        path = list()
-        edge_collection = flow_graph_constraint_database['edge']
-        edge_list = edge_collection.find({'destination.node_type': 'model'})
-        for edge in edge_list:
-            dsar_id = edge['destination']['node_id']
-            # Check if the model is part of the optimal path
-            if model.getVarByName(edge['edge_names'][0]).x == 1:
-                # Get the DSIR of the model, which serves as a node in model_graph
-                dsar = dsar_collection.find_one({'_id': dsar_id})
-                dsir_id_list = dsar['dsir_list']
-                path.extend(dsir_id_list)
+            self.OPTIMAL_PATH = path
 
-        self.OPTIMAL_PATH = path
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+        return
 
     def get_optimal_path(self):
         return self.OPTIMAL_PATH

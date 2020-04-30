@@ -7,6 +7,7 @@ MONGO_KEYFILE = "dsworker_rsa"
 
 
 class DBConnect:
+
     def __init__(self):
         # SSH / Mongo Configuration #
         self.MONGO_SERVER = SSHTunnelForwarder(
@@ -24,25 +25,46 @@ class DBConnect:
             remote_bind_address=('localhost', 27017)
         )
 
-        # open the SSH tunnel to the mongo server
-        self.MONGO_SERVER.start()
+        self.MONGO_CLIENT = None
+        self.GRAPH_CLIENT = None
 
-        # open the SSH tunnel to the graph server
-        self.GRAPH_SERVER.start()
+    def connect_db(self):
+        try:
+            # open the SSH tunnel to the mongo server
+            self.MONGO_SERVER.start()
 
-        self.MONGO_CLIENT = pymongo.MongoClient('localhost', self.MONGO_SERVER.local_bind_port)
-        self.GRAPH_CLIENT = pymongo.MongoClient('localhost', self.GRAPH_SERVER.local_bind_port)
-        print('opened all connections')
+            # open the SSH tunnel to the graph server
+            self.GRAPH_SERVER.start()
+            # open mongo connection
+            self.MONGO_CLIENT = pymongo.MongoClient('localhost', self.MONGO_SERVER.local_bind_port)
+            # open graph connection
+            self.GRAPH_CLIENT = pymongo.MongoClient('localhost', self.GRAPH_SERVER.local_bind_port)
 
-    def __del__(self):
-        # close graph connection
-        self.GRAPH_CLIENT.close()
-        # close the SSH tunnel to the graph server
-        self.GRAPH_SERVER.close()
-        # close mongo connection
-        self.MONGO_CLIENT.close()
-        # close the SSH tunnel to the mongo server
-        self.MONGO_SERVER.close()
+            print('opened all connections')
 
-        print('closed all the connections')
+        except Exception as e:
+            print('cannot connect')
+            raise e
+
+    def disconnect_db(self):
+        try:
+            # close graph connection
+            self.GRAPH_CLIENT.close()
+            # close the SSH tunnel to the graph server
+            self.GRAPH_SERVER.close()
+            # close mongo connection
+            self.MONGO_CLIENT.close()
+            # close the SSH tunnel to the mongo server
+            self.MONGO_SERVER.close()
+
+            self.MONGO_CLIENT = None
+            self.GRAPH_CLIENT = None
+
+            print('closed all the connections')
+
+        except Exception as e:
+            print('cannot disconnect')
+            raise e
+
+
 

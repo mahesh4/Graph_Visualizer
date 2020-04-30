@@ -1,16 +1,9 @@
+from app.db_connect import DBConnect
 
-class PathFinder:
+
+class PathFinder(DBConnect):
     def __init__(self):
-        self.MONGO_CLIENT = None
-        self.GRAPH_CLIENT = None
-
-    def connect_db(self, db_connect):
-        self.MONGO_CLIENT = db_connect.MONGO_CLIENT
-        self.GRAPH_CLIENT = db_connect.GRAPH_CLIENT
-
-    def disconnect_db(self):
-        self.MONGO_CLIENT.close()
-        self.GRAPH_CLIENT.close()
+        DBConnect.__init__(self)
 
     def get_timeline_forward(self, node_id, node_type, path):
         """Function to return the forward timeline. For the given input 'node_id' we find all the edge_names in which the
@@ -95,11 +88,20 @@ class PathFinder:
 
     def get_timeline(self, node_id, node_type='model'):
         """Function to generate the time line for a node from the flow_graph"""
-        # generating the forward path
-        forward_timeline = self.get_timeline_forward(node_id, node_type, list())
-        # generating the backward path
-        backward_timeline = self.get_timeline_backward(node_id, node_type, list())
-        # joining both forward path and backward path to generate a timeline for the node
-        timeline = backward_timeline[1:] + forward_timeline
-        return timeline
 
+        try:
+            self.connect_db()
+            # generating the forward path
+            forward_timeline = self.get_timeline_forward(node_id, node_type, list())
+            # generating the backward path
+            backward_timeline = self.get_timeline_backward(node_id, node_type, list())
+            # joining both forward path and backward path to generate a timeline for the node
+            timeline = backward_timeline[1:] + forward_timeline
+
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+        return timeline
