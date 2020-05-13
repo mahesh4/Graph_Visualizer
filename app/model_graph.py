@@ -38,45 +38,54 @@ class ModelGraphGenerator(DBConnect):
         return timeline
 
     def insert_edge(self, dsir, node):
-        """If the current DSIR is created by the ‘JobGateway’, we look at its nearest ancestor which are created by
-    ‘PostSynchronizationManager’ or ‘JobGateway’ of the previous window and join them using an edge.
+        """
+        We only insert the forward edge for a node. Edge insertion takes place as follows.
 
-    If the current DSIR is created by the ‘PostSynchronizationManager’, we look at its nearest ancestor which are
-    created by the ‘JobGateway’ or ‘PostSynchronizationManager’ of the previous window and join them using an edge. """
+        If the current DSIR is created by the ‘JobGateway’, we look at its nearest descendant which is created by
+    ‘PostSynchronizationManager’ of the present window or ‘JobGateway’ of the next window, and join them using an edge.
+
+    If the current DSIR is created by the ‘PostSynchronizationManager’, we look at its nearest descendant which is
+    created by the ‘JobGateway’ of the next window and join them using an edge. """
 
         database = self.MONGO_CLIENT['ds_results']
         dsir_collection = database['dsir']
 
         if dsir['created_by'] == 'JobGateway':
-            for dsir_parent_id in dsir['parents']:
-                dsir_parent = dsir_collection.find_one({'_id': dsir_parent_id})  # This is a DSIR
-                # created by AM
+            if 'children' in dsir:
+                for child_id in dsir['children']:
+                    dsir_child = dsir_collection.find_one({'_id': child_id})
 
-                # Move backward to find the next ancestor DSIR which is created by the PSM or JobGateway
-                dsir_ancestor_id_list = dsir_parent['parents']
-                for dsir_ancestor_id in dsir_ancestor_id_list:
-                    node['periods'][0]['connector'].append({
-                        'connectTo': str(dsir_ancestor_id),
-                        'connectorType': "start-finish"
-                    })
+                    if dsir_child['created_by'] == 'PostSynchronizationManager':
+                        # The dsir_descendant is also part of the graph, and we generate edges between them
+                        node['periods'][0]['connector'].append({
+                            'connectTo': str(child_id),
+                            'connectorType': "finish-start"
+                        })
+
+                    elif dsir_child['created_by'] == 'AlignmentManager':
+                        # Move forward to find the next descendant DSIR which is created by the JobGateway
+                        dsir_descendant_id_list = dsir_child['children']
+                        for dsir_descendant_id in dsir_descendant_id_list:
+                            node['periods'][0]['connector'].append({
+                                'connectTo': str(dsir_descendant_id),
+                                'connectorType': "finish-start"
+                            })
 
         elif dsir['created_by'] == 'PostSynchronizationManager':
-            for dsir_parent_id in dsir['parents']:
-                dsir_parent = dsir_collection.find_one({'_id': dsir_parent_id})  # This is a DSIR
-                # created by JobGateway
 
-                # Move backward to find the 1st level ancestor DSIR which is created by the AM
-                dsir_ancestor_id_list = dsir_parent['parents']
-                for dsir_ancestor_id in dsir_ancestor_id_list:
-                    dsir_ancestor = dsir_collection.find_one({'_id': dsir_ancestor_id})
-                    # Move backward to find the 2nd level ancestor DSIR which is created by the JobGateway or PSM
-                    dsir_ancestor_2_id_list = dsir_ancestor['parents']
+            if 'children' in dsir:
+                for child_id in dsir['children']:
+                    dsir_child = dsir_collection.find_one({'_id': child_id})  # This is a DSIR
+                    # created by AlignmentManager
 
-                    for dsir_ancestor_2_id in dsir_ancestor_2_id_list:
+                    # Move forward to find the descendant DSIR which is created by the JobGateway
+                    dsir_descendant_id_list = dsir_child['children']
+                    for dsir_descendant_id in dsir_descendant_id_list:
                         node['periods'][0]['connector'].append({
-                            'connectTo': str(dsir_ancestor_2_id),
-                            'connectorType': "start-finish"
+                            'connectTo': str(dsir_descendant_id),
+                            'connectorType': "finish-start"
                         })
+
         return node
 
     def generate_model_graph(self):
@@ -89,45 +98,18 @@ class ModelGraphGenerator(DBConnect):
             graph = list()
             database = self.MONGO_CLIENT['ds_results']
             dsir_collection = database['dsir']
-            dsir_list = dsir_collection.find()
+            dsir_list = dsir_collection.find({'created_by': {'$in': ['JobGateway', 'PostSynchronizationManager']}})
 
             for dsir in dsir_list:
 
                 # TODO: check if more than a single DSIR exists for a single model on a particular window
-
-                if dsir['created_by'] == 'JobGateway':
-                    # Check if the DSIR is not getting post-processed in PSM by checking the 'created_by' of any of its
-                    # children. If the DSIR doesn't have any children
-                    if 'children' not in dsir:
-                        node = self.create_node(dsir)
-
-                        # Generating backward edge
-                        if len(dsir['parents']) == 0:
-                            # No edge to insert
-                            graph.append(node)
-                        else:
-                            # Generating backward edge
-                            node = self.insert_edge(dsir, node)
-                            graph.append(node)
-                    else:
-                        # fetching a child
-                        dsir_child = dsir_collection.find_one({'_id': dsir['children'][0]})
-
-                        if dsir_child['created_by'] == 'PostSynchronizationManager':
-                            # if the children DSIR is created by PSM, then we don't insert this DSIR
-                            continue
-                        else:
-                            node = self.create_node(dsir)
-                            # Generating backward edge
-                            node = self.insert_edge(dsir, node)
-                            graph.append(node)
-
-                elif dsir['created_by'] == 'PostSynchronizationManager':
-                    node = self.create_node(dsir)
-                    # Generating backward edge
+                # creating the graph node
+                node = self.create_node(dsir)
+                if 'children' in dsir:
+                    # Generating forward edge
                     node = self.insert_edge(dsir, node)
-                    graph.append(node)
-                # End of loop
+
+                graph.append(node)
 
             self.MODEL_GRAPH = graph
 
