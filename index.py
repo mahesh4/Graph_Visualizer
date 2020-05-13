@@ -18,11 +18,11 @@ def get_model_graph():
         if request_data['generate']:
             model_graph_generator.generate_model_graph()
             # generating the flow graph, and solving for optimal path in it
-            flow_graph_generator.generate_flow_graph()
-            lp_solver.generate_edge_variables()
-            lp_solver.generate_edge_constraints()
-            lp_solver.generate_obj_fn()
-            lp_solver.solve_optimal_path()
+            # flow_graph_generator.generate_flow_graph()
+            # lp_solver.generate_edge_variables()
+            # lp_solver.generate_edge_constraints()
+            # lp_solver.generate_obj_fn()
+            # lp_solver.solve_optimal_path()
         response = model_graph_generator.get_model_graph()
         return json.dumps(response)
     except Exception as e:
@@ -55,3 +55,7 @@ def get_timeline():
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})
+
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0')
