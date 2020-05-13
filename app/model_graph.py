@@ -80,9 +80,9 @@ class ModelGraphGenerator(DBConnect):
         return node
 
     def generate_model_graph(self):
-        """Function to generate the flow graph. Its done by parsing the DSIRS. A DSIR created by the PSM becomes a node by
-        default, but the DSIR created by JobGateway undergoes the following sanity checks. We check whether children DSIRs
-        are created by PSM or not, if not, then the DSIR becomes a node"""
+        """Function to generate the flow graph. Its done by parsing the DSIRS. A DSIR created by the PSM becomes a node
+        by default, but the DSIR created by JobGateway undergoes the following sanity checks.
+        We check whether children DSIRs are created by PSM or not, if not, then the DSIR becomes a node"""
 
         self.connect_db()
         try:

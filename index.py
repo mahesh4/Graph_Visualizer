@@ -17,12 +17,12 @@ def get_model_graph():
     try:
         if request_data['generate']:
             model_graph_generator.generate_model_graph()
-            # # generating the flow graph, and solving for optimal path in it
-            # flow_graph_generator.generate_flow_graph()
-            # lp_solver.generate_edge_variables()
-            # lp_solver.generate_edge_constraints()
-            # lp_solver.generate_obj_fn()
-            # lp_solver.solve_optimal_path()
+            # generating the flow graph, and solving for optimal path in it
+            flow_graph_generator.generate_flow_graph()
+            lp_solver.generate_edge_variables()
+            lp_solver.generate_edge_constraints()
+            lp_solver.generate_obj_fn()
+            lp_solver.solve_optimal_path()
         response = model_graph_generator.get_model_graph()
         return json.dumps(response)
     except Exception as e:

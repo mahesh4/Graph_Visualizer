@@ -217,10 +217,10 @@ class FlowGraphGenerator(DBConnect):
         return
 
     def job_to_model(self):
-        """Function to generate a edge from job to cluster_aggr and from cluster_aggr to model. For each DSIR created by the
-        PostSynchronizationManager, its backward provenance is checked. If its parent DSIR which is created by the
-        JobGateway lies in the same window, then it will serve as a source node. If no such a parent DSIR exists, then we
-        create a dummy node containing the same DSIR and create a link between the two nodes.
+        """Function to generate a edge from job to cluster_aggr and from cluster_aggr to model. For each DSIR created by
+        the PostSynchronizationManager, its backward provenance is checked. If its parent DSIR which is created by the
+        JobGateway lies in the same window, then it will serve as a source node. If no such a parent DSIR exists, then
+        we create a dummy node containing the same DSIR and create a link between the two nodes.
         """
         try:
             self.connect_db()
@@ -255,6 +255,7 @@ class FlowGraphGenerator(DBConnect):
                     # finding the parent-dsirs(created_by: jobs) to create the link
                     for dsir_parent_id in dsir_parents_id:
                         dsir_parent = dsir_collection.find_one({'_id': dsir_parent_id})
+                        print(dsir_parent_id)
                         if dsir_parent['created_by'] == 'JobGateway' and \
                                 dsir_parent['metadata']['temporal']['begin'] == temporal_begin and \
                                 dsir_parent['metadata']['temporal']['end'] == temporal_end and \

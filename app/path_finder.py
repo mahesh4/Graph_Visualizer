@@ -4,11 +4,14 @@ from app.db_connect import DBConnect
 class PathFinder(DBConnect):
     def __init__(self):
         DBConnect.__init__(self)
+        self.forward_timelines = list()
+        self.backward_timelines = list()
 
     def get_timeline_forward(self, node_id, node_type, path):
-        """Function to return the forward timeline. For the given input 'node_id' we find all the edge_names in which the
-        'node_id' is present as a source node. The edges are all part of valid forward timeline. The source_nodes and
-        destination nodes in these edges are the candidates for the next recursive call of DFS"""
+        """Function to return the forward timeline. For the given input 'node_id', and node_type 'Model',we find all the
+         edge_names in which the 'node_id' is present as a source node. The edges are all part of valid forward
+         timeline. The source_nodes and destination nodes in these edges are the candidates for the next recursive call
+         of DFS"""
 
         flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
         node_collection = flow_graph_constraint_database['node']
@@ -23,8 +26,6 @@ class PathFinder(DBConnect):
             'node_type': node_type
         })
 
-        path.append(node)
-
         edges = node_edge_collection.find_one({
             'node_id': node_id, 'node_type': node_type
         }, {
@@ -32,25 +33,29 @@ class PathFinder(DBConnect):
             '_id': 0
         })
 
-        forward_edges = list()
+        path.append(node)
 
         if 'source_edge' in edges:
+
             forward_edges = edges['source_edge']
 
-        for fr_edge_name in forward_edges:
-            # fetching the nodes in the fr_edge
-            edge = edge_node_collection.find_one({'edge_name': fr_edge_name})
-            for source in edge['source']:
-                if source['node_id'] != node_id:
-                    self.get_timeline_forward(source['node_id'], source['node_type'], path)
+            for fr_edge_name in forward_edges:
+                # fetching the nodes in the fr_edge
+                edge = edge_node_collection.find_one({'edge_name': fr_edge_name})
+                for source in edge['source']:
+                    if source['node_id'] != node_id:
+                        self.get_timeline_forward(source['node_id'], source['node_type'], path)
 
-            destination = edge['destination']
-            self.get_timeline_forward(destination['node_id'], destination['node_type'], path)
+                destination = edge['destination']
+                self.get_timeline_forward(destination['node_id'], destination['node_type'], path)
 
-        return path
+        else:
+            self.forward_timelines.append(path)
+            return
 
     def get_timeline_backward(self, node_id, node_type, path):
-        """Function to return the backward timeline"""
+        """Function to return the backward timeline. For the given input 'node_id', and node_type 'Model',we find all the
+         edge_names in which the 'node_id' is present as a source node"""
 
         flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
         node_collection = flow_graph_constraint_database['node']
@@ -74,17 +79,20 @@ class PathFinder(DBConnect):
             '_id': 0
         })
 
-        backward_edges = list()
+        path.append(node)
 
         if 'destination_edge' in edges:
+
             backward_edges = edges['destination_edge']
 
-        for bk_edge_name in backward_edges:
-            edge = edge_node_collection.find_one({'edge_name': bk_edge_name})
-            for source in edge['source']:
-                self.get_timeline_backward(source['node_id'], source['node_type'], path)
+            for bk_edge_name in backward_edges:
+                edge = edge_node_collection.find_one({'edge_name': bk_edge_name})
+                for source in edge['source']:
+                    self.get_timeline_backward(source['node_id'], source['node_type'], path)
 
-        return path
+        else:
+            self.backward_timelines.append(path)
+            return
 
     def get_timeline(self, node_id, node_type='model'):
         """Function to generate the time line for a node from the flow_graph"""
@@ -92,11 +100,14 @@ class PathFinder(DBConnect):
         try:
             self.connect_db()
             # generating the forward path
-            forward_timeline = self.get_timeline_forward(node_id, node_type, list())
+            self.get_timeline_forward(node_id, node_type, list())
             # generating the backward path
-            backward_timeline = self.get_timeline_backward(node_id, node_type, list())
-            # joining both forward path and backward path to generate a timeline for the node
-            timeline = backward_timeline[1:] + forward_timeline
+            self.get_timeline_backward(node_id, node_type, list())
+            timelines = []
+            # cartesian product of forward path and backward path to generate a timeline for the node
+            for backward_timeline in self.backward_timelines:
+                for forward_timeline in self.forward_timelines:
+                    timelines.append(backward_timeline[1:] + forward_timeline)
 
         except Exception as e:
             raise e
@@ -104,4 +115,4 @@ class PathFinder(DBConnect):
         finally:
             self.disconnect_db()
 
-        return timeline
+        return timelines
