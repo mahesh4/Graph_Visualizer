@@ -1,8 +1,10 @@
 from app.model_graph import ModelGraphGenerator
 from app.flow_graph import FlowGraphGenerator
 from app.lp_solver import LpSolver
-from app.path_finder import PathFinder
+from app.path import PathFinder
 from app.visualize_graph import VisualizeGraph
+from bson.objectid import ObjectId
+
 from matplotlib import pyplot as plt
 
 path_finder = PathFinder()
@@ -13,14 +15,16 @@ lp_solver = LpSolver()
 
 
 def main():
-    # flow_graph_generator.delete_data()
-    # flow_graph_generator.job_to_model()
-    # flow_graph_generator.generate_flow_graph()
+
+    # model_graph.delete_data()
+    # model_graph.generate_model_graph()
+    # print(model_graph.get_model_graph())
     # lp_solver.generate_edge_variables()
     # lp_solver.generate_edge_constraints()
-    # visualize_graph.draw_graph_ntx()
-    model_graph.generate_model_graph()
-    print(model_graph.get_model_graph())
+    # lp_solver.save_model()
+    # lp_solver.generate_obj_fn()
+    # lp_solver.solve_optimal_path()
+    model_graph.get_timeline(ObjectId('5ebf94ab515de4366243274e'))
 
 
 if __name__ == '__main__':

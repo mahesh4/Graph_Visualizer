@@ -1,8 +1,10 @@
 from flask import Flask, request, abort
+import json
+
 from app.model_graph import ModelGraphGenerator
 from app.flow_graph import FlowGraphGenerator
 from app.lp_solver import LpSolver
-import json
+
 app = Flask(__name__)
 model_graph_generator = ModelGraphGenerator()
 flow_graph_generator = FlowGraphGenerator()
