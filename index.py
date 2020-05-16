@@ -18,6 +18,7 @@ def get_model_graph():
     request_data = request.get_json()
     try:
         if request_data['generate']:
+            model_graph_generator.delete_data()
             model_graph_generator.generate_model_graph()
             # generating the flow graph, and solving for optimal path in it
             # flow_graph_generator.generate_flow_graph()
