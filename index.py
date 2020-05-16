@@ -1,5 +1,6 @@
 from flask import Flask, request, abort
 import json
+from bson.objectid import ObjectId
 
 from app.model_graph import ModelGraphGenerator
 from app.flow_graph import FlowGraphGenerator
@@ -54,7 +55,7 @@ def get_timeline():
 
     request_data = request.get_json()
     try:
-        response = model_graph_generator.get_timeline(request_data['node_id'])
+        response = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})
