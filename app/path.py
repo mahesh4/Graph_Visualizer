@@ -162,10 +162,15 @@ class PathFinder(DBConnect):
                 for forward_timeline in self.forward_timelines:
                     timelines.append(backward_timeline + forward_timeline)
 
+            if len(self.backward_timelines) == 0:
+                timelines = self.forward_timelines
+            elif len(self.forward_timelines) == 0:
+                timelines = self.backward_timelines
+
         except Exception as e:
             raise e
 
         finally:
             self.disconnect_db()
 
-        return self.forward_timelines
+        return timelines

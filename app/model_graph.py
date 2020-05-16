@@ -32,6 +32,8 @@ class ModelGraphGenerator(DBConnect):
         timeline = path_finder.get_timeline(node_id)
         print(timeline)
 
+        return timeline
+
     def store_edge(self, source, destination, edge_name, edge_collection):
         try:
             # inserting the edge into the database
