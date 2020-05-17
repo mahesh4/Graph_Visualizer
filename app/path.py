@@ -83,7 +83,7 @@ class PathFinder(DBConnect):
 
         if node['node_type'] == 'model':
             # Only node_type of 'model' is added to the path
-            path = path + [str(node_id)]
+            path = [str(node_id)] + path
 
         # Adding the upstream nodes to the path
         for edge_name in backward_edges:
