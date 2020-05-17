@@ -23,11 +23,11 @@ class PathFinder(DBConnect):
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Any upstream node will always be node_type of 'model'
-                path = path + [candidate_node['node_id']]
+                path = path + [str(candidate_node['node_id'])]
 
         if node['node_type'] == 'model':
             # Only node_type of 'model' is added to the path
-            path = path + [node_id]
+            path = path + [str(node_id)]
 
         # Adding the downstream nodes to the path
         for forward_edge in forward_edges:
@@ -36,13 +36,13 @@ class PathFinder(DBConnect):
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Add the downstream node to the path
-                path = path + [candidate_node['node_id']]
+                path = path + [str(candidate_node['node_id'])]
 
             if candidate_node['node_type'] == 'intermediate' and candidate_node['model_type'] != node['model_type']:
                 # Move forward to find a node_type of 'model'
                 candidate_edge = edge_collection.find_one({'edge_name': candidate_node['source'][0]})
                 model_node = node_collection.find_one({'node_id': candidate_edge['destination']})
-                path = path + [model_node['node_id']]
+                path = path + [str(model_node['node_id'])]
 
         # Performing dfs
         # flag to check if the node is sink
@@ -78,17 +78,17 @@ class PathFinder(DBConnect):
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Add the downstream node to the path
-                path = [candidate_node['node_id']] + path
+                path = [str(candidate_node['node_id'])] + path
 
             if candidate_node['node_type'] == 'intermediate' and candidate_node['model_type'] != node['model_type']:
                 # Move forward to find a node_type of 'model'
                 candidate_edge = edge_collection.find_one({'edge_name': candidate_node['source'][0]})
                 model_node = node_collection.find_one({'node_id': candidate_edge['destination']})
-                path = [model_node['node_id']] + path
+                path = [str(model_node['node_id'])] + path
 
         if node['node_type'] == 'model':
             # Only node_type of 'model' is added to the path
-            path = path + [node_id]
+            path = path + [str(node_id)]
 
         # Adding the upstream nodes to the path
         for edge_name in backward_edges:
@@ -97,7 +97,7 @@ class PathFinder(DBConnect):
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Any upstream node will always be node_type of 'model'
-                path = [candidate_node['node_id']] + path
+                path = [str(candidate_node['node_id'])] + path
 
         # Performing dfs
         # Flag to check if node is source

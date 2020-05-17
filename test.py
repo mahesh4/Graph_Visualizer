@@ -24,7 +24,8 @@ def main():
     # lp_solver.save_model()
     # lp_solver.generate_obj_fn()
     # lp_solver.solve_optimal_path()
-    model_graph.get_timeline(ObjectId('5ebf94ab515de4366243274e'))
+    timelines = model_graph.get_timeline(ObjectId('5ebf94ab515de4366243274e'))
+    print(timelines)
 
 
 if __name__ == '__main__':
