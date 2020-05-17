@@ -56,6 +56,7 @@ def get_timeline():
     request_data = request.get_json()
     try:
         response = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
+        print(response)
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})

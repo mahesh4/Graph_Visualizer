@@ -25,9 +25,7 @@ class ModelGraphGenerator(DBConnect):
         return node
 
     def get_timeline(self, node_id):
-        """Function to get the timeline for a node. Its done by transpiling the timeline for a particular node in flow graph to
-        a timeline for that node in model graph
-        """
+        """Function to get the timeline for a node"""
         path_finder = PathFinder()
         timeline = path_finder.get_timeline(node_id)
         return timeline
