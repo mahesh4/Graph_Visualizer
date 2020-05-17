@@ -17,8 +17,8 @@ class ModelGraphGenerator(DBConnect):
         node['periods'] = [
             dict({
                 'id': str(dsir['_id']),
-                'start': dsir['metadata']['temporal']['begin'],
-                'end': dsir['metadata']['temporal']['end'],
+                'start': dsir['metadata']['temporal']['begin'] * 1000,
+                'end': dsir['metadata']['temporal']['end'] * 1000,
                 'connector': list()
             })
         ]
