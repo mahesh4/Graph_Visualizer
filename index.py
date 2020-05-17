@@ -1,5 +1,6 @@
 from flask import Flask, request, abort
 import json
+from flask_cors import CORS, cross_origin
 from bson.objectid import ObjectId
 
 from app.model_graph import ModelGraphGenerator
@@ -7,6 +8,7 @@ from app.flow_graph import FlowGraphGenerator
 from app.lp_solver import LpSolver
 
 app = Flask(__name__)
+CORS(app)
 model_graph_generator = ModelGraphGenerator()
 flow_graph_generator = FlowGraphGenerator()
 lp_solver = LpSolver()
