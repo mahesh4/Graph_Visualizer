@@ -7,7 +7,7 @@ class PathFinder(DBConnect):
         self.forward_timelines = list()
         self.backward_timelines = list()
 
-    def get_timeline_forward(self, node_id, path, node_collection, edge_collection):
+    def get_timeline_tmp(self, node_id, path, node_collection, edge_collection):
         """Function to return the forward timeline. For the given input 'node_id', and node_type 'Model',we find all the
          edge_names in which the 'node_id' is present as a source node. The edges are all part of valid forward
          timeline. The source_nodes and destination nodes in these edges are the candidates for the next recursive call
@@ -16,51 +16,46 @@ class PathFinder(DBConnect):
         node = node_collection.find_one({'node_id': node_id})
         forward_edges = node['source']
         backward_edges = node['destination']
-        # Adding the upstream nodes to the path
+        upstream_path = list()
+        downstream_path = list()
+
+        # Adding the upstream nodes to the upstream_path
         for edge_name in backward_edges:
             edge = edge_collection.find_one({'edge_name': edge_name})
             candidate_node = node_collection.find_one({'node_id': edge['source']})
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Any upstream node will always be node_type of 'model'
-                path = path + [str(candidate_node['node_id'])]
+                upstream_path.append(candidate_node['node_id'])
 
-        if node['node_type'] == 'model':
-            # Only node_type of 'model' is added to the path
-            path = path + [str(node_id)]
-
-        # Adding the downstream nodes to the path
+        # Adding the downstream nodes to the downstream_path
         for forward_edge in forward_edges:
             edge = edge_collection.find_one({'edge_name': forward_edge})
             candidate_node = node_collection.find_one({'node_id': edge['destination']})
 
             if candidate_node['node_type'] == 'model' and candidate_node['model_type'] != node['model_type']:
                 # Add the downstream node to the path
-                path = path + [str(candidate_node['node_id'])]
+                downstream_path.append(candidate_node['node_id'])
 
             if candidate_node['node_type'] == 'intermediate' and candidate_node['model_type'] != node['model_type']:
                 # Move forward to find a node_type of 'model'
                 candidate_edge = edge_collection.find_one({'edge_name': candidate_node['source'][0]})
                 model_node = node_collection.find_one({'node_id': candidate_edge['destination']})
-                path = path + [str(model_node['node_id'])]
+                downstream_path.append(model_node['node_id'])
 
-        # Performing dfs
-        # flag to check if the node is sink
-        flag = True
-        for edge_name in forward_edges:
-            edge = edge_collection.find_one({'edge_name': edge_name})
-            candidate_node = node_collection.find_one({'node_id': edge['destination']})
-            if candidate_node['model_type'] == node['model_type']:
-                # Setting this flag to denote the node had a edge to next-window
-                flag = False
-                self.get_timeline_forward(candidate_node['node_id'], path, node_collection, edge_collection)
-                if candidate_node['node_type'] == 'intermediate':
-                    # TODO: Need to work on case where all the intermediate aren't aggregated into a single model
-                    break
+        if len(upstream_path) == 0:
+            for downstream_node in downstream_path:
+                path.append([str(downstream_node), str(node_id)])
+        elif len(downstream_path) == 0:
+            # This the case where node with node_type 'model' or 'intermediate'
+            for upstream_node in upstream_path:
+                path.append([str(upstream_node), str(node_id)])
+        else:
+            for upstream_node in upstream_path:
+                for downstream_node in downstream_path:
+                    path.append([str(upstream_node), str(node_id), str(downstream_node)])
 
-        if flag:
-            self.forward_timelines.append(path)
-
+        self.forward_timelines.append(path)
         return
 
     def get_timeline_backward(self, node_id, path, node_collection, edge_collection):
@@ -119,6 +114,31 @@ class PathFinder(DBConnect):
         return
 
     def get_timeline(self, node_id):
+        """
+        Function to generate the time line for a node from the model_graph.
+        Assumption: the node with node_type model is always input as parameter
+        """
+        try:
+            self.connect_db()
+            model_graph_database = self.GRAPH_CLIENT['model_graph']
+            node_collection = model_graph_database['node']
+            edge_collection = model_graph_database['edge']
+            node = node_collection.find_one({'node_id': node_id})
+            if node['node_type'] == 'model':
+                self.get_timeline_tmp(node_id, list(), node_collection, edge_collection)
+            else:
+                edge = edge_collection.find_one({'source': node_id})
+                candidate_node = node_collection.find_one({'node_id': edge['destination']})
+                self.get_timeline_tmp(candidate_node['node_id'], list(), node_collection, edge_collection)
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+        return self.forward_timelines
+
+    def get_timeline_multi_window(self, node_id):
         """
         Function to generate the time line for a node from the model_graph.
         Assumption: the node with node_type model is always input as parameter
