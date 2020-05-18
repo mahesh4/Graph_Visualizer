@@ -235,6 +235,7 @@ class ModelGraphGenerator(DBConnect):
     def delete_data(self):
         try:
             self.connect_db()
+            self.EDGE_COUNT = 0
             # removing all existing edge-node documents in edge_node collection in flow_graph_path database
             self.GRAPH_CLIENT['model_graph']['edge'].remove({})
             # removing all existing node-edge vertex pairs in flow_graph_path database

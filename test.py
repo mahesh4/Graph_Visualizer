@@ -16,16 +16,16 @@ lp_solver = LpSolver()
 
 def main():
 
-    model_graph.delete_data()
-    model_graph.generate_model_graph()
-    print(model_graph.get_model_graph())
+    # model_graph.delete_data()
+    # model_graph.generate_model_graph()
+    # print(model_graph.get_model_graph())
     # lp_solver.generate_edge_variables()
     # lp_solver.generate_edge_constraints()
     # lp_solver.save_model()
     # lp_solver.generate_obj_fn()
     # lp_solver.solve_optimal_path()
-    # timelines = model_graph.get_timeline(ObjectId('5ebf960d98472ef50bb45d2b'))
-    # print(timelines)
+    timelines = model_graph.get_timeline(ObjectId('5ebf960d98472ef50bb45d2b'))
+    print(timelines)
 
 
 if __name__ == '__main__':

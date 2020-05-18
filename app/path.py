@@ -1,4 +1,5 @@
 from app.db_connect import DBConnect
+from bson.objectid import ObjectId
 
 
 class PathFinder(DBConnect):
@@ -55,8 +56,9 @@ class PathFinder(DBConnect):
                 for downstream_node in downstream_path:
                     path.append([str(upstream_node), str(node_id), str(downstream_node)])
 
-        self.forward_timelines.append(path)
-        return
+        self.forward_timelines = path
+
+        return self.forward_timelines
 
     def get_timeline_backward(self, node_id, path, node_collection, edge_collection):
         """Function to return the backward timeline. For the given input 'node_id', and node_type 'Model',we find all the
@@ -118,6 +120,7 @@ class PathFinder(DBConnect):
         Function to generate the time line for a node from the model_graph.
         Assumption: the node with node_type model is always input as parameter
         """
+        timelines = []
         try:
             self.connect_db()
             model_graph_database = self.GRAPH_CLIENT['model_graph']
@@ -130,27 +133,28 @@ class PathFinder(DBConnect):
                 edge = edge_collection.find_one({'source': node_id})
                 candidate_node = node_collection.find_one({'node_id': edge['destination']})
                 self.get_timeline_tmp(candidate_node['node_id'], list(), node_collection, edge_collection)
+
+            for timeline in self.forward_timelines:
+                data = dict({
+                    'score': 1,
+                    'timeline': []
+                })
+                for node_id in timeline:
+                    model_type = node_collection.find_one({'node_id': ObjectId(node_id)}, {'model_type': 1, '_id': 0})['model_type']
+                    node = dict({
+                        'name': model_type,
+                        '_id': node_id
+                    })
+                    data['timeline'].append(node)
+
+                timelines.append(data)
+
         except Exception as e:
             raise e
 
         finally:
             self.disconnect_db()
-
-        timelines = []
-        for timeline in self.forward_timelines:
-            data = dict({
-                'score': 1,
-                'timeline': []
-            })
-
-            for node_id in timeline:
-                node = dict({
-                    'name': node_collection.find_one({'node_id': node_id}, {'model_type': 1}),
-                    '_id': node_id
-                })
-                data['timline'].append(node)
-            timelines.append(data)
-        return timelines
+            return timelines
 
     def get_timeline_multi_window(self, node_id):
         """
@@ -185,7 +189,8 @@ class PathFinder(DBConnect):
                             back_edge = edge_collection.find_one({'edge_name': back_edge_name})
                             back_node = node_collection.find_one({'node_id': back_edge['source']})
                             if back_node['model_type'] == node['model_type']:
-                                self.get_timeline_backward(back_node['node_id'], list(), node_collection, edge_collection)
+                                self.get_timeline_backward(back_node['node_id'], list(), node_collection,
+                                                           edge_collection)
                                 break
 
                         break  # break out of outer-loop
