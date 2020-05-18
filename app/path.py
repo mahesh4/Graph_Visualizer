@@ -136,7 +136,21 @@ class PathFinder(DBConnect):
         finally:
             self.disconnect_db()
 
-        return self.forward_timelines
+        timelines = []
+        for timeline in self.forward_timelines:
+            data = dict({
+                'score': 1,
+                'timeline': []
+            })
+
+            for node_id in timeline:
+                node = dict({
+                    'name': node_collection.find_one({'node_id': node_id}, {'model_type': 1}),
+                    '_id': node_id
+                })
+                data['timline'].append(node)
+            timelines.append(data)
+        return timelines
 
     def get_timeline_multi_window(self, node_id):
         """

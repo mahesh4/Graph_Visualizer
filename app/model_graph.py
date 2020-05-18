@@ -27,8 +27,8 @@ class ModelGraphGenerator(DBConnect):
     def get_timeline(self, node_id):
         """Function to get the timeline for a node"""
         path_finder = PathFinder()
-        timeline = path_finder.get_timeline(node_id)
-        return timeline
+        timelines = path_finder.get_timeline(node_id)
+        return timelines
 
     def store_edge(self, source, destination, edge_name, edge_collection):
         try:
