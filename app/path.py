@@ -46,7 +46,7 @@ class PathFinder(DBConnect):
 
         if len(upstream_path) == 0:
             for downstream_node in downstream_path:
-                path.append([str(downstream_node), str(node_id)])
+                path.append([str(node_id), str(downstream_node)])
         elif len(downstream_path) == 0:
             # This the case where node with node_type 'model' or 'intermediate'
             for upstream_node in upstream_path:

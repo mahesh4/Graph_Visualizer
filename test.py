@@ -16,9 +16,9 @@ lp_solver = LpSolver()
 
 def main():
 
-    # model_graph.delete_data()
-    # model_graph.generate_model_graph()
-    # print(model_graph.get_model_graph())
+    model_graph.delete_data()
+    model_graph.generate_model_graph()
+    print(model_graph.get_model_graph())
     # lp_solver.generate_edge_variables()
     # lp_solver.generate_edge_constraints()
     # lp_solver.save_model()
