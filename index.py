@@ -14,6 +14,15 @@ flow_graph_generator = FlowGraphGenerator()
 lp_solver = LpSolver()
 
 
+@app.route('/', methods=['GET'])
+def index():
+    response = {
+        'message': 'This service provided by the Emit lab, Arizona State '
+                   'University. '
+    }
+    return response
+
+
 @app.route('/get/model_graph', methods=['POST'])
 def get_model_graph():
     global model_graph_generator, lp_solver
