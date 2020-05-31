@@ -68,20 +68,17 @@ class VisualizeGraph(DBConnect):
     def draw_graph_ntx(self):
         try:
             self.connect_db()
-            flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
+            flow_graph_constraint_database = self.GRAPH_CLIENT['model_graph']
             edge_list_collection = flow_graph_constraint_database['edge']
             edge_list = edge_list_collection.find({})
             N = ntx.Graph()
             for edge in edge_list:
-                for i in range(len(edge['source'])):
-                    source = edge['source']
-                    destination = edge['destination']
-                    edge_name = edge['edge_names'][i]
-                    source_label = source[i]['node_type'] + '-' + source[i]['type'] + '-' + \
-                                   str(source[i]['node_id'])[-3:]
-                    destination_label = destination['node_type'] + '-' + destination['type'] + '-' + \
-                                        str(destination['node_id'])[-3:]
-                    N.add_edge(source_label, destination_label, name=edge_name, color='g')
+                source = edge['source']
+                destination = edge['destination']
+                edge_name = edge['edge_name']
+                source_label = str(source)[-3:]
+                destination_label = str(destination)[-3:]
+                N.add_edge(source_label, destination_label, name=edge_name, color='g')
 
             pos = ntx.spring_layout(N, k=3/math.sqrt(N.order()))
             # pos = ntx.random_layout(N)

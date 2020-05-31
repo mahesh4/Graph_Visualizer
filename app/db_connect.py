@@ -31,17 +31,20 @@ class DBConnect:
 
     def connect_db(self):
         try:
-            # open the SSH tunnel to the mongo server
-            self.MONGO_SERVER.start()
+            if self.MONGO_CLIENT is None and self.GRAPH_CLIENT is None:
+                # open the SSH tunnel to the mongo server
+                self.MONGO_SERVER.start()
 
-            # open the SSH tunnel to the graph server
-            self.GRAPH_SERVER.start()
-            # open mongo connection
-            self.MONGO_CLIENT = pymongo.MongoClient('localhost', self.MONGO_SERVER.local_bind_port)
-            # open graph connection
-            self.GRAPH_CLIENT = pymongo.MongoClient('localhost', self.GRAPH_SERVER.local_bind_port)
+                # open the SSH tunnel to the graph server
+                self.GRAPH_SERVER.start()
+                # open mongo connection
+                self.MONGO_CLIENT = pymongo.MongoClient('localhost', self.MONGO_SERVER.local_bind_port)
+                # open graph connection
+                self.GRAPH_CLIENT = pymongo.MongoClient('localhost', self.GRAPH_SERVER.local_bind_port)
 
-            print('opened all connections')
+                print('opened all connections')
+            else:
+                print('connections already exists')
 
         except Exception as e:
             print('cannot connect')

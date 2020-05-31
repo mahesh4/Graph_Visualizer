@@ -1,4 +1,4 @@
-from app.path import PathFinder
+from app.path_2 import PathFinder
 from app.db_connect import DBConnect
 
 
@@ -8,6 +8,7 @@ class ModelGraphGenerator(DBConnect):
         DBConnect.__init__(self)
         self.MODEL_GRAPH = None
         self.OPTIMAL_PATHS = list()
+        self.model_dependency_list = ['human_mobility', 'flood', 'hurricane']
         self.EDGE_COUNT = 0
 
     def create_node(self, dsir):
@@ -17,18 +18,40 @@ class ModelGraphGenerator(DBConnect):
         node['periods'] = [
             dict({
                 'id': str(dsir['_id']),
-                'start': dsir['metadata']['temporal']['begin'] * 1000,
-                'end': dsir['metadata']['temporal']['end'] * 1000,
+                'end': int(dsir['metadata']['temporal']['end']) * 1000,
                 'connector': list()
             })
         ]
+        if dsir['created_by'] == 'PostSynchronizationManager':
+            node['periods'][0]['start'] = int(dsir['metadata']['temporal']['end']) * 1000
+        else:
+            node['periods'][0]['start'] = int(dsir['metadata']['temporal']['begin']) * 1000
+
         return node
 
     def get_timeline(self, node_id):
         """Function to get the timeline for a node"""
         path_finder = PathFinder()
-        timelines = path_finder.get_timeline(node_id)
-        return timelines
+        paths = path_finder.get_timeline()
+        node_timelines = list()
+
+        for model_type in self.model_dependency_list:
+            timelines = paths[model_type]['timelines']
+            for timeline in timelines:
+                for t_node in timeline:
+                    if t_node['_id'] == node_id:
+                        node_timelines.append(timeline)
+
+            if len(node_timelines) > 0:
+                break
+
+        # Post processing the timelines
+        for timeline in node_timelines:
+            for t_node in timeline:
+                t_node['_id'] = str(t_node['_id'])
+                t_node['destination'] = [str(destination) for destination in t_node['destination']]
+
+        return node_timelines
 
     def store_edge(self, source, destination, edge_name, edge_collection):
         try:
@@ -44,14 +67,16 @@ class ModelGraphGenerator(DBConnect):
 
     def update_node(self, node_id, node_type, model_type, source_edge, destination_edge, node_collection):
         if len(source_edge) > 0:
-            node_collection.update({'node_id': node_id}, {
+            node_collection.update({'node_id': node_id, }, {
                 '$push': {
                     'source': source_edge,
+                },
+                '$setOnInsert': {
+                    'destination': []
                 },
                 '$set': {
                     'model_type': model_type,
                     'node_type': node_type,
-                    'destination': []
                 }
             }, upsert=True)
 
@@ -60,10 +85,12 @@ class ModelGraphGenerator(DBConnect):
                 '$push': {
                     'destination': destination_edge,
                 },
+                '$setOnInsert': {
+                    'source': []
+                },
                 '$set': {
                     'model_type': model_type,
                     'node_type': node_type,
-                    'source': []
                 }
             }, upsert=True)
 
@@ -123,8 +150,8 @@ class ModelGraphGenerator(DBConnect):
                             # storing the nodes
                             self.update_node(dsir['_id'], 'model', dsir['metadata']['model_type'], edge_name, '',
                                              node_collection)
-                            self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '', edge_name,
-                                             node_collection)
+                            self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '',
+                                             edge_name, node_collection)
 
             elif dsir['created_by'] == 'PostSynchronizationManager':
                 for child_id in dsir['children']:
@@ -148,8 +175,8 @@ class ModelGraphGenerator(DBConnect):
                         # storing the nodes
                         self.update_node(dsir['_id'], 'model', dsir['metadata']['model_type'], edge_name, '',
                                          node_collection)
-                        self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '', edge_name,
-                                         node_collection)
+                        self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '',
+                                         edge_name, node_collection)
 
             return node
 
@@ -176,7 +203,6 @@ class ModelGraphGenerator(DBConnect):
 
             for dsir in dsir_list:
                 # TODO: check if more than a single DSIR exists for a single model on a particular window
-
                 # creating the graph node
                 node = self.create_node(dsir)
                 # generating the forward edges
