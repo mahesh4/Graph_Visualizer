@@ -16,14 +16,14 @@ visualize_graph = VisualizeGraph()
 
 def main():
 
-    # model_graph.delete_data()
-    # model_graph.generate_model_graph()
+    model_graph.delete_data()
+    model_graph.generate_model_graph()
     # print(model_graph.get_model_graph())
     # start_nodes = path_finder.find_start_nodes()
     # print(start_nodes)
     # path_finder.generate_window_number(start_nodes)
-    timelines = path_finder.get_timeline()
-    print(timelines)
+    # timelines = path_finder.get_timeline()
+    # print(timelines)
 
 
 if __name__ == '__main__':
