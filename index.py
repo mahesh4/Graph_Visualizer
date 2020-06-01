@@ -66,7 +66,15 @@ def get_timeline():
 
     request_data = request.get_json()
     try:
-        response = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
+        timelines = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
+        
+        response = list()
+        for timeline in timelines:
+            response.append(dict({
+                "score": 1,
+                "links": timeline
+            }))
+
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})
