@@ -1,5 +1,5 @@
 from flask import Flask, request, abort
-import json
+import json, os
 from flask_cors import CORS, cross_origin
 from bson.objectid import ObjectId
 
@@ -99,8 +99,8 @@ def get_database():
     try:
         request_json = request.get_json()
         key_count = 0
-
-        with open("config.json", "r") as fp:
+        file_path = os.path.join(os.getcwd(), "config.json")
+        with open(file_path, "r") as fp:
             config = json.load(fp)
             fp.close()
 
@@ -110,7 +110,7 @@ def get_database():
                 config[key] = request_json[key]
 
         if key_count == len(request_json):
-            with open("config.json", "w") as fp:
+            with open(file_path, "w") as fp:
                 json.dump(config, fp)
                 fp.close()
         else:

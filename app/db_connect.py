@@ -1,5 +1,5 @@
 import pymongo
-import json
+import json, os
 from sshtunnel import SSHTunnelForwarder
 
 MONGO_KEYFILE = "dsworker_rsa"
@@ -12,7 +12,8 @@ class DBConnect:
     def __init__(self):
         global MONGO_IP, GRAPH_IP
 
-        with open("../config.json", "r") as fp:
+        file_path = os.path.join(os.getcwd(), "..", "config.json")
+        with open(file_path, "r") as fp:
             config = json.load(fp)
             MONGO_IP = config["MONGO_IP"]
             GRAPH_IP = config["GRAPH_IP"]
