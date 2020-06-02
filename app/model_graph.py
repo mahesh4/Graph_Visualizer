@@ -48,7 +48,8 @@ class ModelGraphGenerator(DBConnect):
             for t_node in timeline:
                 t_node['_id'] = str(t_node['_id'])
                 t_node['destination'] = [str(destination) for destination in t_node['destination']]
-                t_node['selected'] = True
+                if node_id == t_node['_id']:
+                    t_node['selected'] = True
 
         return node_timelines
 
