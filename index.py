@@ -67,8 +67,8 @@ def get_timeline():
     request_data = request.get_json()
     try:
         timelines = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
-        
         response = list()
+
         for timeline in timelines:
             response.append(dict({
                 "score": 1,
@@ -76,9 +76,52 @@ def get_timeline():
             }))
 
         return json.dumps(response)
+
+    except Exception as e:
+        abort(500, {'status': e})
+
+
+@app.route('/get/database', methods=["GET"])
+def get_database():
+    try:
+        with open("config.json", "r") as fp:
+            response = json.load(fp)
+            fp.close()
+
+        return json.dumps(response)
+
+    except Exception as e:
+        abort(500, {'status': e})
+
+
+@app.route('/change/database', methods=["POST"])
+def get_database():
+    try:
+        request_json = request.get_json()
+        key_count = 0
+
+        with open("config.json", "r") as fp:
+            config = json.load(fp)
+            fp.close()
+
+        for key, value in config.items():
+            if key in request_json:
+                key_count += 0
+                config[key] = request_json[key]
+
+        if key_count == len(request_json):
+            with open("config.json", "w") as fp:
+                json.dump(config, fp)
+                fp.close()
+        else:
+            raise Exception("Key Mismatch Error")
+
+        response = dict({"message": "IP updates successfully"})
+        return json.dumps(response)
+
     except Exception as e:
         abort(500, {'status': e})
 
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0')
+    app.run(host='0.0.0.0', threaded=True)

@@ -22,9 +22,7 @@ class ModelGraphGenerator(DBConnect):
                 'connector': list()
             })
         ]
-        if dsir['created_by'] == 'PostSynchronizationManager':
-            node['periods'][0]['start'] = int(dsir['metadata']['temporal']['end']) * 1000
-        else:
+        if dsir['created_by'] != 'PostSynchronizationManager':
             node['periods'][0]['start'] = int(dsir['metadata']['temporal']['begin']) * 1000
 
         return node
@@ -50,6 +48,7 @@ class ModelGraphGenerator(DBConnect):
             for t_node in timeline:
                 t_node['_id'] = str(t_node['_id'])
                 t_node['destination'] = [str(destination) for destination in t_node['destination']]
+                t_node['selected'] = True
 
         return node_timelines
 
