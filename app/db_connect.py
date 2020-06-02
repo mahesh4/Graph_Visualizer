@@ -12,7 +12,7 @@ class DBConnect:
     def __init__(self):
         global MONGO_IP, GRAPH_IP
 
-        file_path = os.path.join(os.getcwd(), "..", "config.json")
+        file_path = os.path.join(os.getcwd(), "config.json")
         with open(file_path, "r") as fp:
             config = json.load(fp)
             MONGO_IP = config["MONGO_IP"]
