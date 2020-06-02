@@ -95,7 +95,7 @@ def get_database():
 
 
 @app.route('/change/database', methods=["POST"])
-def get_database():
+def change_database():
     try:
         request_json = request.get_json()
         key_count = 0
