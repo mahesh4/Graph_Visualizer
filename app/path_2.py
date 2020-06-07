@@ -5,7 +5,7 @@ from bson.objectid import ObjectId
 class PathFinder(DBConnect):
     def __init__(self):
         DBConnect.__init__(self)
-        self.model_dependency_list = ['flood', 'hurricane', 'human_mobility']
+        self.model_dependency_list = ['hurricane', 'flood', 'human_mobility']
         self.timelines = dict()
         for model in self.model_dependency_list:
             self.timelines[model] = dict()
@@ -37,11 +37,7 @@ class PathFinder(DBConnect):
                     t1_des = set(t1_node['destination'])
                     t2_des = set(t2_node['destination'])
                     destination = list(t1_des.union(t2_des))
-                    merged_timeline.append({
-                        'name': t1_node['name'],
-                        '_id': t1_node['_id'],
-                        'destination': destination
-                    })
+                    merged_timeline.append({'name': t1_node['name'], '_id': t1_node['_id'], 'destination': destination})
                     break
 
         for t1_node in timeline1:
@@ -95,32 +91,36 @@ class PathFinder(DBConnect):
 
                     # Find the back-edge linking to the previous window
                     if source['model_type'] == sc_node['name']:
-                        del_timelines_index = []
-                        merged_timelines = list()
-                        for i in range(len(timelines)):
-                            index = self.get_node_index_timeline(source, timelines[i])
-                            if index is not None:
-                                destination_list = timelines[i][index]['destination']
-                                for d_node_id in destination_list:
-                                    d_node = node_collection.find_one({'node_id': d_node_id})
-                                    # check for multiple forward edges to the same model_type of the node
-                                    if d_node['model_type'] == node['model_type']:
-                                        timelines[i][index]['destination'].remove(d_node_id)
+                        if source["node_type"] == "model":
+                            del_timelines_index = []
+                            merged_timelines = list()
+                            for i in range(len(timelines)):
+                                index = self.get_node_index_timeline(source, timelines[i])
+                                if index is not None:
+                                    destination_list = timelines[i][index]['destination']
+                                    for d_node_id in destination_list:
+                                        d_node = node_collection.find_one({'node_id': d_node_id})
+                                        # check for multiple forward edges to the same model_type of the node
+                                        if d_node['model_type'] == node['model_type']:
+                                            timelines[i][index]['destination'].remove(d_node_id)
 
-                                timelines[i][index]['destination'].append(sc_node['_id'])
+                                    timelines[i][index]['destination'].append(sc_node['_id'])
+                                    timelines[i].append(sc_node)
+                                else:
+                                    ext_timelines = self.extract_timelines_node(source)
+                                    del_timelines_index.append(i)
+                                    for ext_timeline in ext_timelines:
+                                        merged_timelines.append(self.merge_timelines(timelines[i], ext_timeline))
+
+                            for i in range(len(del_timelines_index)):
+                                del timelines[i]
+
+                            if len(merged_timelines) > 0:
+                                timelines += merged_timelines
+                        else:
+                            for i in range(len(timelines)):
                                 timelines[i].append(sc_node)
-                            else:
-                                ext_timelines = self.extract_timelines_node(source)
-                                del_timelines_index.append(i)
-                                for ext_timeline in ext_timelines:
-                                    merged_timelines.append(self.merge_timelines(timelines[i], ext_timeline))
-
-                        for i in range(len(del_timelines_index)):
-                            del timelines[i]
-
-                        if len(merged_timelines) > 0:
-                            timelines += merged_timelines
-
+                            break
         return timelines
 
     def generate_timelines(self):
@@ -146,6 +146,11 @@ class PathFinder(DBConnect):
                 # finding all the nodes part of current simulation_context
                 simulation_context_node_id = node_list[0]
                 simulation_context_node = node_collection.find_one({'node_id': simulation_context_node_id})
+                del node_list[0]
+
+                if simulation_context_node_id in visited_nodes:
+                    continue
+
                 visited_nodes.add(simulation_context_node_id)
                 context_node_list = [simulation_context_node_id]
                 simulation_context_visited = [simulation_context_node_id]
@@ -156,8 +161,6 @@ class PathFinder(DBConnect):
                         'destination': []
                     })
                 ]
-
-                del node_list[0]
 
                 while len(context_node_list) > 0:
                     node_id = context_node_list[0]
@@ -212,12 +215,40 @@ class PathFinder(DBConnect):
                     self.timelines['window_num'] += 1
 
                 if window_num < simulation_context_node['window_num']:
+                    visited_scr_nodes = set()
                     for edge_name in simulation_context_node['destination']:
                         edge = edge_collection.find_one({'edge_name': edge_name})
                         source = node_collection.find_one({'node_id': edge['source']})
 
                         if source['model_type'] == simulation_context_node['model_type']:
-                            # Search for the timeline in which the source is present and merge the simulation_context
+                            if source["node_type"] == "intermediate":
+                                # Need to move backward to find a node_type of "model"
+                                for src_edge_name in source["destination"]:
+                                    src_edge = edge_collection.find_one({"edge_name": src_edge_name})
+                                    src_node = node_collection.find_one({"node_id": src_edge["source"]})
+                                    if src_node["model_type"] == simulation_context_node["model_type"]:
+                                        # Search for the timeline in which the source is present and merge the
+                                        # simulation_context
+                                        if src_node["node_id"] not in visited_scr_nodes:
+                                            visited_scr_nodes.add(src_node["node_id"])
+                                            for i in range(0, len(timelines)):
+                                                for t_node in timelines[i]:
+                                                    if src_node['node_id'] == t_node['_id']:
+                                                        new_timelines = self.stitch_timeline(timelines[i].copy(),
+                                                                                             simulation_context.copy(),
+                                                                                             node_collection,
+                                                                                             edge_collection)
+                                                        # Adding to the del_timeline
+                                                        del_timelines[simulation_context_node['model_type']][
+                                                            'timelines_index'] \
+                                                            .add(i)
+                                                        # saving the new_timeline
+                                                        for new_timeline in new_timelines:
+                                                            tmp_timelines[simulation_context_node['model_type']] \
+                                                                ['timelines'].append(new_timeline)
+                        else:
+                            # Search for the timeline in which the source is present and merge the
+                            # simulation_context
                             for i in range(0, len(timelines)):
                                 for t_node in timelines[i]:
                                     if source['node_id'] == t_node['_id']:
@@ -237,12 +268,19 @@ class PathFinder(DBConnect):
                 for edge_name in simulation_context_node['source']:
                     edge = edge_collection.find_one({'edge_name': edge_name})
                     destination = node_collection.find_one({'node_id': edge['destination']})
-                    if destination['node_id'] not in visited_nodes and \
-                            destination['model_type'] == simulation_context_node['model_type']:
-                        node_list.append(destination['node_id'])
+                    if destination['model_type'] == simulation_context_node['model_type']:
+                        if destination["node_type"] == "model":
+                            if destination["node_id"] not in visited_nodes:
+                                node_list.append(destination["node_id"])
+                        else:
+                            # Need to find a node_type "model".
+                            # All intermediate nodes have a single source edge
+                            des_edge_name = destination["source"][0]
+                            des_edge = edge_collection.find_one({"edge_name": des_edge_name})
+                            if des_edge["destination"] not in visited_nodes:
+                                node_list.append(des_edge["destination"])
 
                 # End of loop
-            # TODO: Need a better logic to merge
             for model_type in self.model_dependency_list:
                 # Deleting the timelines which got evolved
                 for index in del_timelines[model_type]['timelines_index']:

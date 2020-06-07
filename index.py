@@ -106,7 +106,7 @@ def change_database():
 
         for key, value in config.items():
             if key in request_json:
-                key_count += 0
+                key_count += 1
                 config[key] = request_json[key]
 
         if key_count == len(request_json):
