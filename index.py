@@ -1,5 +1,6 @@
 from flask import Flask, request, abort
 import json, os
+from random import randrange
 from flask_cors import CORS, cross_origin
 from bson.objectid import ObjectId
 
@@ -71,7 +72,7 @@ def get_timeline():
 
         for timeline in timelines:
             response.append(dict({
-                "score": 1,
+                "score": randrange(10),
                 "links": timeline
             }))
 
