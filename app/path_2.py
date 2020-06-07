@@ -315,7 +315,6 @@ class PathFinder(DBConnect):
 
                 # End of While loop
 
-            print(self.timelines)
             for model_type in self.model_dependency_list:
                 # Deleting the timelines which got evolved
                 for index in del_timelines[model_type]['timelines_index']:
