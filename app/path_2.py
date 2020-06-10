@@ -233,10 +233,10 @@ class PathFinder(DBConnect):
                     # Adding the new timelines to the self.timelines
                     self.timelines[model_type]['timelines'] += tmp_timelines[model_type]['timelines']
                     # Updating the window_num
-                    self.timelines['window_num'] += 1
+                    self.timelines[model_type]['window_num'] += 1
 
                     # Clearing the del_timelines and tmp_timelines
-                    self.timelines[model_type]['timelines'] = []
+                    del_timelines[model_type]['timelines_index'] = set()
                     tmp_timelines[model_type]['timelines'] = []
 
                 if window_num < simulation_context_node['window_num']:
