@@ -59,6 +59,9 @@ def get_timeline():
 
     request_data = request.get_json()
     try:
+        start_nodes = timelines.find_start_nodes()
+        model_graph_generator.generate_node_label()
+        timelines.generate_window_number(start_nodes)
         node_id = timelines.find_node(ObjectId(request_data['node_id']))
         response = timelines.get_timeline(node_id)
 
