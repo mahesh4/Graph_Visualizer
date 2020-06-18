@@ -1,5 +1,6 @@
 from app.path_2 import PathFinder
 from app.db_connect import DBConnect
+from bson.objectid import ObjectId
 
 
 class ModelGraphGenerator(DBConnect):
@@ -8,7 +9,7 @@ class ModelGraphGenerator(DBConnect):
         DBConnect.__init__(self)
         self.MODEL_GRAPH = None
         self.OPTIMAL_PATHS = list()
-        self.model_dependency_list = ['human_mobility', 'flood', 'hurricane']
+        self.model_dependency_list = ['hurricane', 'flood', 'human_mobility']
         self.EDGE_COUNT = 0
 
     def create_node(self, dsir):
@@ -18,7 +19,6 @@ class ModelGraphGenerator(DBConnect):
         node['periods'] = [
             dict({
                 'id': str(dsir['_id']),
-                'contribution': dsir['metadata']['contribution'],
                 'end': int(dsir['metadata']['temporal']['end']) * 1000,
                 'connector': list()
             })
@@ -32,27 +32,52 @@ class ModelGraphGenerator(DBConnect):
         """Function to get the timeline for a node"""
         path_finder = PathFinder()
         paths = path_finder.get_timeline()
-        node_timelines = list()
+        try:
+            self.connect_db()
+            model_graph_database = self.GRAPH_CLIENT['model_graph']
+            node_collection = model_graph_database['node']
 
-        for model_type in self.model_dependency_list:
-            timelines = paths[model_type]['timelines']
-            for timeline in timelines:
-                for t_node in timeline:
-                    if t_node['_id'] == node_id:
-                        node_timelines.append(timeline)
+            config_collection = model_graph_database['config']
+            config = config_collection.find_one({})
+            no_of_simulations = config["no_of_simulations"]
 
-            if len(node_timelines) > 0:
-                break
+            node_timelines = list()
+            for model_type in reversed(self.model_dependency_list):
+                timelines = paths[model_type]['timelines']
+                for timeline in timelines:
+                    for t_node in timeline:
+                        if t_node['_id'] == node_id:
+                            node_timelines.append(timeline)
 
-        # Post processing the timelines
-        for timeline in node_timelines:
-            for t_node in timeline:
-                t_node['_id'] = str(t_node['_id'])
-                t_node['destination'] = [str(destination) for destination in t_node['destination']]
-                if str(node_id) == t_node['_id']:
-                    t_node['selected'] = True
+                if len(node_timelines) > 0:
+                    break
 
-        return node_timelines
+            # Post processing the timelines
+            ordered_timelines = []
+            for timeline in node_timelines:
+                ord_timeline = []
+                for window_num in range(1, no_of_simulations + 1):
+                    for model in self.model_dependency_list:
+                        index = 0
+                        while index < len(timeline):
+                            t_node = timeline[index]
+                            index += 1
+                            t_window_num = node_collection.find_one({"node_id": ObjectId(t_node["_id"])})["window_num"]
+                            if window_num == t_window_num and model == t_node["name"]:
+                                t_node['_id'] = str(t_node['_id'])
+                                t_node['destination'] = [str(destination) for destination in t_node['destination']]
+                                if str(node_id) == t_node['_id']:
+                                    t_node['selected'] = True
+                                ord_timeline.append(t_node)
+
+                ordered_timelines.append(ord_timeline)
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+        return ordered_timelines
 
     def store_edge(self, source, destination, edge_name, edge_collection):
         try:
@@ -77,7 +102,7 @@ class ModelGraphGenerator(DBConnect):
                 },
                 '$set': {
                     'model_type': model_type,
-                    'node_type': node_type,
+                    'node_type': node_type
                 }
             }, upsert=True)
 
@@ -91,7 +116,7 @@ class ModelGraphGenerator(DBConnect):
                 },
                 '$set': {
                     'model_type': model_type,
-                    'node_type': node_type,
+                    'node_type': node_type
                 }
             }, upsert=True)
 
@@ -109,6 +134,16 @@ class ModelGraphGenerator(DBConnect):
         """
         try:
             if 'children' not in dsir:
+                node_collection.update({'node_id': dsir["_id"], }, {
+                    '$setOnInsert': {
+                        'destination': [],
+                        'source': []
+                    },
+                    '$set': {
+                        'model_type': dsir["metadata"]["model_type"],
+                        'node_type': "model",
+                    }
+                }, upsert=True)
                 return node
 
             if dsir['created_by'] == 'JobGateway':
@@ -128,9 +163,9 @@ class ModelGraphGenerator(DBConnect):
                         # storing the edge to the database
                         self.store_edge(dsir['_id'], child_id, edge_name, edge_collection)
                         # storing the nodes
-                        self.update_node(dsir['_id'], 'intermediate', dsir['metadata']['model_type'], edge_name, '',
+                        self.update_node(dsir['_id'],"intermediate", dsir['metadata']['model_type'], edge_name, '',
                                          node_collection)
-                        self.update_node(child_id, 'model', dsir['metadata']['model_type'], '', edge_name,
+                        self.update_node(child_id, "model",dsir['metadata']['model_type'], '', edge_name,
                                          node_collection)
 
                     elif dsir_child['created_by'] == 'AlignmentManager':
@@ -149,10 +184,21 @@ class ModelGraphGenerator(DBConnect):
                             # storing the edge to the database
                             self.store_edge(dsir['_id'], dsir_descendant_id, edge_name, edge_collection)
                             # storing the nodes
-                            self.update_node(dsir['_id'], 'model', dsir['metadata']['model_type'], edge_name, '',
+                            self.update_node(dsir['_id'], "model",dsir['metadata']['model_type'], edge_name, '',
                                              node_collection)
-                            self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '',
-                                             edge_name, node_collection)
+                            # self.update_node(dsir_descendant_id, dsir_descendant['metadata']['model_type'], '',
+                            #                  edge_name, node_collection)
+                            node_collection.update({'node_id': dsir_descendant_id}, {
+                                '$push': {
+                                    'destination': edge_name,
+                                },
+                                '$setOnInsert': {
+                                    'source': []
+                                },
+                                '$set': {
+                                    'model_type': dsir_descendant['metadata']['model_type'],
+                                }
+                            }, upsert=True)
 
             elif dsir['created_by'] == 'PostSynchronizationManager':
                 for child_id in dsir['children']:
@@ -174,10 +220,21 @@ class ModelGraphGenerator(DBConnect):
                         # storing the edge to the database
                         self.store_edge(dsir['_id'], dsir_descendant_id, edge_name, edge_collection)
                         # storing the nodes
-                        self.update_node(dsir['_id'], 'model', dsir['metadata']['model_type'], edge_name, '',
+                        self.update_node(dsir['_id'], "model",dsir['metadata']['model_type'], edge_name, '',
                                          node_collection)
-                        self.update_node(dsir_descendant_id, 'model', dsir_descendant['metadata']['model_type'], '',
-                                         edge_name, node_collection)
+                        # self.update_node(dsir_descendant_id,dsir_descendant['metadata']['model_type'], '',
+                        #                  edge_name, node_collection)
+                        node_collection.update({'node_id': dsir_descendant_id}, {
+                            '$push': {
+                                'destination': edge_name,
+                            },
+                            '$setOnInsert': {
+                                'source': []
+                            },
+                            '$set': {
+                                'model_type': dsir_descendant['metadata']['model_type'],
+                            }
+                        }, upsert=True)
 
             return node
 
@@ -212,52 +269,13 @@ class ModelGraphGenerator(DBConnect):
                 # adding the node to the graph
                 graph.append(node)
 
-            self.MODEL_GRAPH = graph
-
         except Exception as e:
             raise e
 
         finally:
             self.disconnect_db()
 
-        return
-
-    def generate_optimal_path(self, model):
-        """Function to generate the optimal path for model graph by transpiling the optimal path in the flow graph.
-        Its done by taking into consideration of the nodes of type 'model' which are part of the optimal path. These nodes
-        are of data-type DSAR, in which the DSIRs wrap around, are the nodes in the model graph"""
-        try:
-            self.connect_db()
-            database = self.MONGO_CLIENT['ds_results']
-            dsar_collection = database['dsar']
-            flow_graph_constraint_database = self.GRAPH_CLIENT['flow_graph_constraint']
-            path = list()
-            edge_collection = flow_graph_constraint_database['edge']
-            edge_list = edge_collection.find({'destination.node_type': 'model'})
-            for edge in edge_list:
-                dsar_id = edge['destination']['node_id']
-                # Check if the model is part of the optimal path
-                if model.getVarByName(edge['edge_names'][0]).x == 1:
-                    # Get the DSIR of the model, which serves as a node in model_graph
-                    dsar = dsar_collection.find_one({'_id': dsar_id})
-                    dsir_id_list = dsar['dsir_list']
-                    path.extend(dsir_id_list)
-
-            self.OPTIMAL_PATHS = path
-
-        except Exception as e:
-            raise e
-
-        finally:
-            self.disconnect_db()
-
-        return
-
-    def get_optimal_path(self):
-        return self.OPTIMAL_PATHS
-
-    def get_model_graph(self):
-        return self.MODEL_GRAPH
+        return graph
 
     def delete_data(self):
         try:
@@ -267,6 +285,36 @@ class ModelGraphGenerator(DBConnect):
             self.GRAPH_CLIENT['model_graph']['edge'].remove({})
             # removing all existing node-edge vertex pairs in flow_graph_path database
             self.GRAPH_CLIENT['model_graph']['node'].remove({})
+
+        except Exception as e:
+            raise e
+
+        finally:
+            self.disconnect_db()
+
+    def generate_node_label(self):
+        try:
+            self.connect_db()
+            model_graph_database = self.GRAPH_CLIENT['model_graph']
+            node_collection = model_graph_database['node']
+            edge_collection = model_graph_database['edge']
+            node_list = node_collection.find({"model_type": "flood"})
+            for node in node_list:
+                backward_edges = edge_collection.find({"destination": node["node_id"]})
+                b_flag = False
+                for edge in backward_edges:
+                    backward_node = node_collection.find_one({"node_id": edge["source"]})
+                    if backward_node["model_type"] != node["model_type"]:
+                        if len(node["source"]) == 0:
+                            node_collection.update_one({"node_id": node["node_id"]},
+                                                       {"$set": {"node_type": "model"}})
+                        else:
+                            node_collection.update_one({"node_id": node["node_id"]}, {"$set": {"node_type": "intermediate"}})
+                        b_flag = True
+                        break
+
+                if not b_flag:
+                    node_collection.update_one({"node_id": node["node_id"]}, {"$set": {"node_type": "model"}})
 
         except Exception as e:
             raise e

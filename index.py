@@ -1,18 +1,22 @@
-from flask import Flask, request, abort
-import json, os
+import json
+import os
 from random import randrange
-from flask_cors import CORS, cross_origin
-from bson.objectid import ObjectId
 
-from app.model_graph import ModelGraphGenerator
+from bson.objectid import ObjectId
+from flask import Flask, request, abort
+from flask_cors import CORS
+
 from app.flow_graph import FlowGraphGenerator
 from app.lp_solver import LpSolver
+from app.model_graph import ModelGraphGenerator
+from app.timelines import Timelines
 
 app = Flask(__name__)
 CORS(app)
 model_graph_generator = ModelGraphGenerator()
 flow_graph_generator = FlowGraphGenerator()
 lp_solver = LpSolver()
+timelines = Timelines()
 
 
 @app.route('/', methods=['GET'])
@@ -30,33 +34,21 @@ def get_model_graph():
 
     request_data = request.get_json()
     try:
-        if request_data['generate']:
-            model_graph_generator.delete_data()
-            model_graph_generator.generate_model_graph()
-            # generating the flow graph, and solving for optimal path in it
-            # flow_graph_generator.generate_flow_graph()
-            # lp_solver.generate_edge_variables()
-            # lp_solver.generate_edge_constraints()
-            # lp_solver.generate_obj_fn()
-            # lp_solver.solve_optimal_path()
-        response = model_graph_generator.get_model_graph()
+        model_graph_generator.delete_data()
+        response = model_graph_generator.generate_model_graph()
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})
 
 
-@app.route('/get/model_graph/optimal_path', methods=['POST'])
+@app.route('/get/model_graph/optimal_path', methods=['GET'])
 def get_optimal_path():
-    global model_graph_generator, lp_solver
+    global lp_solver
 
-    request_data = request.get_json()
     try:
-        if request_data['generate']:
-            model = lp_solver.get_model()
-            model_graph_generator.generate_optimal_path(model)
-        response = model_graph_generator.get_optimal_path()
-        response = [str(node_id) for node_id in response]
+        response = lp_solver.generate_optimal_path()
         return json.dumps(response)
+
     except Exception as e:
         abort(500, {'status': e})
 
@@ -67,14 +59,8 @@ def get_timeline():
 
     request_data = request.get_json()
     try:
-        timelines = model_graph_generator.get_timeline(ObjectId(request_data['node_id']))
-        response = list()
-
-        for timeline in timelines:
-            response.append(dict({
-                "score": randrange(10),
-                "links": timeline
-            }))
+        node_id = timelines.find_node(ObjectId(request_data['node_id']))
+        response = timelines.get_timeline(node_id)
 
         return json.dumps(response)
 
