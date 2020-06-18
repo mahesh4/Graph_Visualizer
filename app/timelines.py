@@ -284,8 +284,7 @@ class Timelines(DBConnect):
                             node_links[t_node_id] = []
                             for edge in backward_edges:
                                 backward_node = node_collection.find_one({"node_id": edge["source"]})
-                                if backward_node["model_type"] == t_node["model_type"] and backward_node[
-                                    "node_type"] == "intermediate":
+                                if backward_node["model_type"] == t_node["model_type"] and backward_node["node_type"] == "intermediate":
                                     timeline_set.add(backward_node["node_id"])
                                     node_links[backward_node["node_id"]] = []
 
@@ -337,7 +336,7 @@ class Timelines(DBConnect):
                 return node["node_id"]
             else:
                 forward_edges = edge_collection.find({"source": node_id})
-                return forward_edges["destination"]
+                return forward_edges[0]["destination"]
 
         except Exception as e:
             raise e
