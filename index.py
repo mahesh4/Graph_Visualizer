@@ -1,22 +1,35 @@
 import json
 import os
-from random import randrange
-
-from bson.objectid import ObjectId
 from flask import Flask, request, abort
 from flask_cors import CORS
+from flask import g
+from bson.objectid import ObjectId
 
-from app.flow_graph import FlowGraphGenerator
-from app.lp_solver import LpSolver
-from app.model_graph import ModelGraphGenerator
+# Custom imports
+from app.model_graph import ModelGraph
 from app.timelines import Timelines
+from app.db_connect import DBConnect
 
 app = Flask(__name__)
 CORS(app)
-model_graph_generator = ModelGraphGenerator()
-flow_graph_generator = FlowGraphGenerator()
-lp_solver = LpSolver()
-timelines = Timelines()
+
+
+def get_db():
+    """Opens a new database connection if there is none yet for the
+    current application context.
+    """
+    if not hasattr(g, 'db'):
+        db = DBConnect()
+        db.connect_db()
+        g.db = db
+    return g.db.get_connection()
+
+
+@app.teardown_appcontext
+def close_db(error):
+    db = g.pop('db', None)
+    if db is not None:
+        db.disconnect_db()
 
 
 @app.route('/', methods=['GET'])
@@ -28,45 +41,34 @@ def index():
     return response
 
 
-@app.route('/get/model_graph', methods=['POST'])
+@app.route('/model_graph/', methods=['POST'])
 def get_model_graph():
-    global model_graph_generator, lp_solver
-
+    # TODO: Need to generate graph for a specific worflow
     request_data = request.get_json()
     try:
-        model_graph_generator.delete_data()
-        response = model_graph_generator.generate_model_graph()
+        mongo_client, graph_client = get_db()
+        model_graph = ModelGraph(mongo_client, graph_client)
+        # Deleting any existing data in DB if any
+        model_graph.delete_data()
+        response = model_graph.generate_model_graph()
+        # Generating window_num for nodes in model_graph
+        model_graph.generate_window_number()
         return json.dumps(response)
     except Exception as e:
         abort(500, {'status': e})
 
 
-@app.route('/get/model_graph/optimal_path', methods=['GET'])
-def get_optimal_path():
-    global lp_solver
-
-    try:
-        response = lp_solver.generate_optimal_path()
-        return json.dumps(response)
-
-    except Exception as e:
-        abort(500, {'status': e})
-
-
-@app.route('/get/model_graph/timeline', methods=['POST'])
+@app.route('/model_graph/top_k_timelines', methods=['POST'])
 def get_timeline():
-    global model_graph_generator
-
     request_data = request.get_json()
     try:
-        start_nodes = timelines.find_start_nodes()
-        model_graph_generator.generate_node_label()
-        timelines.generate_window_number(start_nodes)
-        node_id = timelines.find_node(ObjectId(request_data['node_id']))
-        response = timelines.get_timeline(node_id)
-
+        mongo_client, graph_client = get_db()
+        timelines = Timelines(mongo_client, graph_client)
+        if "number" in request_data:
+            response = timelines.get_top_k_timelines(request_data["number"])
+        else:
+            raise Exception("Invalid arguments passed")
         return json.dumps(response)
-
     except Exception as e:
         abort(500, {'status': e})
 

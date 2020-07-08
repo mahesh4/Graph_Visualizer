@@ -1,344 +1,305 @@
-from app.db_connect import DBConnect
 from bson.objectid import ObjectId
-from copy import deepcopy
+from collections import defaultdict
+import heapq
 import itertools
-from sortedcontainers import SortedSet
+import math
 
 
-class Timelines(DBConnect):
-    def __init__(self):
-        DBConnect.__init__(self)
-        self.model_dependency_list = ['hurricane', 'flood', 'human_mobility']
-        self.model_window_width = [172780, 43200, 10800]
-        self.model_window_start = [1530403220, 1530403220, 1530403220]
-        self.model_state = {"hurricane": "stateful", "flood": "stateful", "human_mobility": "stateless"}
-        # TODO: Hard coded no of windows
-        self.window_num = {"hurricane": 1, "flood": 5, "human_mobility": 6}
-        self.paths = {"hurricane": [], "flood": [], "human_mobility": []}
+class Timelines:
+    def __init__(self, mongo_client, graph_client):
+        self.MONGO_CLIENT = mongo_client
+        self.GRAPH_CLIENT = graph_client
+        # TODO: Hard coded no of windows for each model
+        self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
+        self.window_count = {"hurricane": 1, "flood": 5, "human_mobility": 6}
+        self.model_paths = {"hurricane": [], "flood": [], "human_mobility": []}
         self.timelines = []
+        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee5ad3820c7f46abb64a069")})
 
-    def generate_timeline(self):
-        start_nodes = self.find_start_model_nodes()
+    def get_top_k_timelines(self, k):
         try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT['model_graph']
-            node_collection = model_graph_database['node']
-            edge_collection = model_graph_database['edge']
-            top_5_score = SortedSet()
+            node_collection = self.GRAPH_CLIENT['model_graph']['node']
+            edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
+            timelines_index_list = self.generate_timelines(k)
+
+            # TODO: Hardcoded here
+            model_type_list = ["hurricane", "flood", "human_mobility"]
+            timelines_list = []
+
+            for timelines_index in timelines_index_list:
+                timeline = []
+                score = timelines_index[0]
+                index_list = timelines_index[1]
+
+                # Adding all the intermediate nodes to the stateful nodes path
+                for i in range(len(model_type_list)):
+                    if self.config["model"][model_type_list[i]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                        model_path = self.model_paths[model_type_list[i]][index_list[i]]
+                        new_model_path = []
+                        for node_id in model_path:
+                            node = node_collection.find_one({"node_id": node_id})
+                            # We are not processing nor adding "intermediate" nodes present in the model_path directly, but we are adding them
+                            # through adjacent_node_id_list
+                            if node["node_type"] == "model":
+                                # All the forward adjacent nodes are "intermediate" nodes
+                                adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
+                                new_model_path.append(node_id)
+                                new_model_path.extend(adjacent_node_id_list)
+                        # Adding the new_model_path to the self.model_paths
+                        self.model_paths[model_type_list[i]][index_list[i]] = new_model_path
+
+                timeline_node_set = set.union(*map(set, [self.model_paths[model_type_list[i]][index_list[i]] for i in range(len(index_list))]))
+                for i in range(len(index_list)):
+                    model_type = model_type_list[i]
+                    model_path = self.model_paths[model_type][index_list[i]]
+                    for node_id in model_path:
+                        node = {"name": model_type, "_id": str(node_id), "destination": []}
+                        adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
+                        for adjacent_node_id in adjacent_node_id_list:
+                            if adjacent_node_id in timeline_node_set:
+                                node["destination"].append(str(adjacent_node_id))
+
+                        timeline.append(node)
+                        # End of for
+                    # End of for
+                # End of for
+                timelines_list.append({"score": score, "links": timeline})
+        except Exception as e:
+            raise e
+
+        return timelines_list
+
+    def generate_timelines(self, k):
+        try:
+            node_collection = self.GRAPH_CLIENT['model_graph']['node']
+            edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
+            stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
+            stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
 
             # Perform DFS on each "stateful" model_type
-            for model in self.model_dependency_list:
-                if self.model_state[model] == "stateful":
-                    node_list = [node_id for node_id in start_nodes
-                                 if node_collection.find_one({"node_id": node_id})["model_type"] == model]
-                    for node_id in node_list:
-                        self.dfs(node_id, model, node_collection, edge_collection, [])
-
-            # Generating timelines
-            # TODO: Hardcoded the stateful models here
-            for candidate_timeline in itertools.product(self.paths["hurricane"], self.paths["flood"]):
-                # Flatten the list
-                timeline = [j for sub in candidate_timeline for j in sub]
-                score = self.find_score(timeline, node_collection, edge_collection)
-                timeline_set = set(timeline)
-
-                for model in self.model_dependency_list:
-                    if self.model_state[model] == "stateless":
-                        max_window_num = self.window_num[model]
-                        w_no = 1
-                        while w_no < max_window_num:
-                            candidate_node_list = list(
-                                node_collection.find({"window_num": w_no, "node_type": "model", "model_type": model}))
-                            max_score = 0
-                            node_id_add = None
-
-                            for candidate_node in candidate_node_list:
-                                model_score = 0
-                                backward_edge_list = edge_collection.find({"destination": candidate_node["node_id"]})
-                                for backward_edge in backward_edge_list:
-                                    source_id = backward_edge["source"]
-                                    if source_id in timeline_set:
-                                        model_score += 1
-                                if max_score <= model_score:
-                                    node_id_add = candidate_node["node_id"]
-                                    max_score = model_score
-
-                            if node_id_add is not None:
-                                timeline.append(node_id_add)
-                                score += max_score
-                                timeline_set.add(node_id_add)
-                            # else:
-                            #     print("something went wrong")
-
-                            w_no += 1
-                # End of loop
-                self.timelines.append(dict({"score": score, "nodes": timeline}))
-
-                # print(score)
-                # print(timeline)
-                # print()
-
-            # End of loop
-
-        except Exception as e:
-            raise e
-        finally:
-            self.disconnect_db()
-
-    def dfs(self, node_id, model, node_collection, edge_collection, path):
-        # Adding node_id to the path
-        path.append(node_id)
-        node = node_collection.find_one({"node_id": node_id})
-
-        if node["window_num"] == self.window_num[model]:
-            self.paths[model].append(path)
-        # elif len(node["source"]) == 0 and node["window_num"] < self.window_num[model]:
-        #     candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "node_type": "model", "model_type": model})
-        #     for candidate_node in candidate_node_list:
-        #         self.dfs(candidate_node["node_id"], model, node_collection, edge_collection, path.copy())
-        else:
-            visited = set()
-            for edge_name in node["source"]:
-                edge = edge_collection.find_one({"edge_name": edge_name})
-                destination = node_collection.find_one({"node_id": edge["destination"]})
-                if destination["node_type"] == "model":
-                    self.dfs(destination["node_id"], model, node_collection, edge_collection, path.copy())
+            for model_type in stateful_models:
+                visited = set()
+                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    for node in node_list:
+                        forward_edges = edge_collection.find({"source": node["node_id"]})
+                        destination_list = [edge["destination"] for edge in forward_edges]
+                        for destination_id in destination_list:
+                            destination = node_collection.find_one({"node_id": destination_id})
+                            if destination["model_type"] == model_type and destination_id not in visited:
+                                visited.add(destination_id)
+                                self.dfs(node, model_type, [])
                 else:
-                    # NOTE: There will be only one edge out of intermediate node, because it will only contribute to one
-                    # cluster
-                    destination_edge_name = destination["source"][0]
-                    destination_edge = edge_collection.find_one({"edge_name": destination_edge_name})
-                    candidate_node_id = destination_edge["destination"]
-                    if candidate_node_id not in visited:
-                        visited.add(candidate_node_id)
-                        self.dfs(candidate_node_id, model, node_collection, edge_collection, path.copy())
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                for node in node_list:
+                    self.dfs(node, model_type, [])
 
-    def find_score(self, timeline, node_collection, edge_collection):
-        timeline_set = set(timeline)
-        score = 0
-
-        for t_node_id in timeline_set:
-            t_node = node_collection.find_one({"node_id": t_node_id})
-            backward_edges = edge_collection.find({"destination": t_node_id})
-            t_flag = False
-            for edge in backward_edges:
-                source = node_collection.find_one({"node_id": edge["source"]})
-                if source["model_type"] == t_node["model_type"] and source["node_type"] == "intermediate":
-                    # We have to do only for one "intermediate" node
-                    edge_list = edge_collection.find({"destination": source["node_id"]})
-                    node_id_list = [edge["source"] for edge in edge_list]
-                    for node_id in node_id_list:
-                        if node_id in timeline_set:
-                            score += 1
-
-                    t_flag = True
-                    break
-
-            if not t_flag:
-                for edge in backward_edges:
-                    node_id = edge["source"]
-                    if node_id in timeline_set:
-                        score += 1
-
-        return score
-
-    def find_start_nodes(self):
-        """Function to find the start nodes of the model_graph"""
-        try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT['model_graph']
-            database = self.MONGO_CLIENT["ds_results"]
-            node_collection = model_graph_database['node']
-            edge_collection = model_graph_database['edge']
-            dsir_collection = database["dsir"]
-            # TODO: Hardcoded the start_time here
-            dsir_list = dsir_collection.find({
-                "metadata.temporal.begin": 1530403220,
-                'created_by': {'$in': ['JobGateway', 'PostSynchronizationManager']}
-            })
-            start_nodes = list()
-
-            for dsir in dsir_list:
-                node = node_collection.find_one({"node_id": dsir["_id"]})
-                if len(node['destination']) == 0 and node['node_type'] == 'model':
-                    start_nodes.append(node['node_id'])
+            # Finding the most compatible paths on each "stateless" model_type
+            for model_type in stateless_models:
+                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
                 else:
-                    if node["node_type"] == "intermediate":
-                        start_nodes.append(node["node_id"])
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+
+                for node in node_list:
+                    self.find_most_compatible_path(node, model_type, [])
+
+            # Generating the doc_list for Fagin's algorithm
+            doc_list = []
+            for model_type in self.model_paths:
+                lst_score = []
+                for i in range(len(self.model_paths[model_type])):
+                    # Finding the score for the path
+                    score = self.find_model_path_score(self.model_paths[model_type][i], model_type)
+                    lst_score.append({i: score})
+                doc_list.append(lst_score)
+
+            doc_list = [sorted(lst, key=lambda k: list(k.values()), reverse=True) for lst in doc_list]
+            max_doc_list_len = max([len(lst) for lst in doc_list])
+
+            # Preprocessing doc_list so that all lists have equal length
+            # for lst in doc_list:
+            #     lst_len = len(lst)
+            #     if lst_len < max_doc_list_len:
+            #         lst.extend([{lst_len + 1: 0}] * (max_doc_list_len - len(lst)))
+
+            # Running NRA
+            top_k_timelines = []
+            heapq.heapify(top_k_timelines)
+            k_score = 0
+
+            for row_idx in range(max_doc_list_len):
+                candidate_doc_list = [col[: row_idx + 1] if row_idx < len(col) else col[:] for col in doc_list]
+                for candidate_timeline in itertools.product(*candidate_doc_list):
+                    count = len([True for i in range(len(candidate_timeline)) if candidate_doc_list[i].index(candidate_timeline[i]) < row_idx])
+                    # Base Case, We had already visited this timeline
+                    if count == len(doc_list):
+                        continue
                     else:
-                        source_edges = edge_collection.find({"destination": node["node_id"]})
-                        t_flag = False
-                        for edge in source_edges:
-                            source = node_collection.find_one({"node_id": edge["source"]})
-                            if source["model_type"] == node["model_type"]:
-                                t_flag = True
-                                break
+                        compatibility, score = self.check_compatiblity(candidate_timeline)
+                        if compatibility and (k > len(top_k_timelines) or score > k_score):
+                            if 0 < len(top_k_timelines) == k:
+                                heapq.heappop(top_k_timelines)
 
-                        if not t_flag:
-                            start_nodes.append(node["node_id"])
-
-            ordered_start_nodes = []
-            for model in self.model_dependency_list:
-                for node_id in start_nodes:
-                    node = node_collection.find_one({'node_id': node_id})
-                    if node['model_type'] == model:
-                        ordered_start_nodes.append(node_id)
-
+                            heapq.heappush(top_k_timelines, (score, [list(path.keys())[-1] for path in candidate_timeline]))
+                            k_score = heapq.nsmallest(1, top_k_timelines)[0][0]
+                            if len(top_k_timelines) == k:
+                                return top_k_timelines
+                # End of for
+            # End of for
         except Exception as e:
             raise e
+        # No of timelines is less than k
+        return top_k_timelines
 
-        finally:
-            self.disconnect_db()
+    def check_compatiblity(self, timeline):
+        # TODO: Hardcoded here
+        model_type_list = ["hurricane", "flood", "human_mobility"]
+        score = 0
+        for i in range(len(timeline)):
+            model_type = model_type_list[i]
+            model_path_index = list(timeline[i].keys())[-1]
+            score += list(timeline[i].values())[-1]
+            for j in self.model_dependency_list[model_type]:
+                up_model_path_index = list(timeline[j].keys())[-1]
+                up_model_type = model_type_list[j]
+                no_of_edges = self.find_no_of_edges(self.model_paths[up_model_type][up_model_path_index],
+                                                    self.model_paths[model_type][model_path_index])
+                if no_of_edges < math.floor(self.window_count[model_type] / 2):
+                    return False, -1
+            # End of for
+        # End of for
+        return True, score
 
-        return ordered_start_nodes
-
-    def find_start_model_nodes(self):
+    def dfs(self, node, model_type, path):
+        """Function to perform dfs
+        NOTE: We don't maintain visited list because the graph is acyclic. Cycles occur during clustering and there is a local visited set
+        maintained"""
         try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT['model_graph']
-            node_collection = model_graph_database['node']
-            node_list = node_collection.find({"window_num": 1, "node_type": "model"})
-            start_nodes = [node["node_id"] for node in node_list]
-            return start_nodes
+            node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
+            edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
 
-        except Exception as e:
-            raise e
-        finally:
-            self.disconnect_db()
+            # Adding node_id to the path and visited
+            path.append(node["node_id"])
 
-    def generate_window_number(self, start_nodes):
-        try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT['model_graph']
-            database = self.MONGO_CLIENT["ds_results"]
-            node_collection = model_graph_database['node']
-            edge_collection = model_graph_database['edge']
-            dsir_collection = database["dsir"]
-            config = model_graph_database["config"]
-            window = 1
-
-            while len(start_nodes) > 0:
-                node_list = []
-                for node_id in start_nodes:
-                    node = node_collection.find_one({'node_id': node_id})
-                    # updating the window_num for the node
-                    node_collection.update({'node_id': node_id}, {'$set': {'window_num': window}})
-
-                    # pre-processing the node
-                    # finding the forward-links which are connected to model nodes of the same model-type
-                    for edge_name in node['source']:
-                        edge = edge_collection.find_one({'edge_name': edge_name})
-                        destination = node_collection.find_one({'node_id': edge['destination']})
-                        if destination['model_type'] == node['model_type'] and destination['node_type'] == 'model':
-                            # updating the window_num for the model node
-                            node_collection.update({'node_id': destination["node_id"]},
-                                                   {'$set': {'window_num': window}})
-
-                # Performing temporal comparison to find the nodes for the next window
-                for i in range(len(self.model_dependency_list)):
-                    begin = self.model_window_start[i] + self.model_window_width[i]
-                    dsir_list = list(dsir_collection.find({
-                        "metadata.temporal.begin": begin,
-                        "metadata.model_type": self.model_dependency_list[i],
-                        "created_by": "JobGateway"
-                    }))
-                    dsir_id_list = [dsir["_id"] for dsir in dsir_list]
-
-                    if len(dsir_id_list) > 0:
-                        node_list.extend(dsir_id_list)
-                        # Moving the temporal begin to next window begin
-                        self.model_window_start[i] += self.model_window_width[i]
-
-                start_nodes = node_list
-                window += 1
-
-            # Updating the config with no of windows
-            config.update_one({}, {"$set": {"no_of_simulations": window}})
-
-        except Exception as e:
-            raise e
-
-        finally:
-            self.disconnect_db()
-
-    def get_timeline(self, node_id):
-        self.generate_timeline()
-        try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT["model_graph"]
-            node_collection = model_graph_database["node"]
-            edge_collection = model_graph_database["edge"]
-            node = node_collection.find_one({"node_id": node_id})
-            ret_timelines_list = []
-            if node["node_type"] == "model":
-                # Finding timelines for the node
-                for timeline in self.timelines:
-                    timeline_set = set(timeline["nodes"])
-                    if node_id in timeline_set:
-                        node_links = dict()
-                        ret_timeline = []
-                        # Adding all the intermediate nodes to the timeline set
-                        for t_node_id in timeline["nodes"]:
-                            backward_edges = edge_collection.find({"destination": t_node_id})
-                            t_node = node_collection.find_one({"node_id": t_node_id})
-                            node_links[t_node_id] = []
-                            for edge in backward_edges:
-                                backward_node = node_collection.find_one({"node_id": edge["source"]})
-                                if backward_node["model_type"] == t_node["model_type"] and backward_node["node_type"] == "intermediate":
-                                    timeline_set.add(backward_node["node_id"])
-                                    node_links[backward_node["node_id"]] = []
-
-                        # Now generating the timeline in Visualization format
-                        for t_node_id in timeline_set:
-                            forward_edges = edge_collection.find({"source": t_node_id})
-                            adjacent_nodes = [edge["destination"] for edge in forward_edges]
-                            for adj_node_id in adjacent_nodes:
-                                if adj_node_id in timeline_set:
-                                    node_links[t_node_id].append(adj_node_id)
-
-                        for t_node_id, destination in node_links.items():
-                            t_node = node_collection.find_one({"node_id": t_node_id})
-                            if t_node_id == node_id:
-                                ret_timeline.append({
-                                    "name": t_node["model_type"],
-                                    "_id": str(t_node_id),
-                                    "destination": [str(des) for des in destination],
-                                    "selected": True
-                                })
-                            else:
-                                ret_timeline.append({
-                                    "name": t_node["model_type"],
-                                    "_id": str(t_node_id),
-                                    "destination": [str(des) for des in destination],
-                                })
-
-                        ret_timelines_list.append({
-                            "score": timeline["score"],
-                            "links": ret_timeline
-                        })
-
-        except Exception as e:
-            raise e
-
-        finally:
-            self.disconnect_db()
-
-        return ret_timelines_list
-
-    def find_node(self, node_id):
-        try:
-            self.connect_db()
-            model_graph_database = self.GRAPH_CLIENT["model_graph"]
-            node_collection = model_graph_database["node"]
-            edge_collection = model_graph_database["edge"]
-            node = node_collection.find_one({"node_id": node_id})
-            if node["node_type"] == "model":
-                return node["node_id"]
+            if node["window_num"] == self.window_count[model_type] and node["node_type"] == "model":
+                # Adding the path to the self.model_path
+                self.model_paths[model_type].append(path)
             else:
-                forward_edges = edge_collection.find({"source": node_id})
-                return forward_edges[0]["destination"]
+                forward_edges = edge_collection.find({"source": node["node_id"]})
+                visited = set()
+                for edge in forward_edges:
+                    candidate_node = node_collection.find_one({"node_id": edge["destination"]})
+                    if candidate_node["model_type"] == model_type:
+                        if candidate_node["node_type"] == "model" and candidate_node["node_id"] not in visited:
+                            visited.add(candidate_node["node_id"])
+                            self.dfs(candidate_node, model_type, path.copy())
+                        elif candidate_node["node_type"] == "intermediate":
+                            # From an "intermediate" node there is only one outgoing edge to the "model" node of the same model_type
+                            desc_edge_list = edge_collection.find({"source": candidate_node["node_id"]})
+                            desc_nodes_id_list = [desc_edge["destination"] for desc_edge in desc_edge_list]
+                            for desc_node_id in desc_nodes_id_list:
+                                if desc_node_id not in visited:
+                                    visited.add(desc_node_id)
+                                    self.dfs(candidate_node, model_type, path.copy())
 
+                if node["node_type"] == "model" and len(list(forward_edges)) == 0:
+                    # Finding a node in the next window based on parametric compatibility
+                    if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                        candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
+                                                                    "node_type": "intermediate"})
+                    else:
+                        candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
+                                                                    "node_type": "model"})
+                    # Ranking the nodes based on parametric compatibility
+                    job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
+                    dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
+                    dsir1 = dsir_collection.find_one({"_id": node["node_id"]})
+                    job1 = job_collection.find_one({"_id": dsir1["metadata"]["job_id"]})
+                    most_compatible_node = None
+                    max_score = 0
+                    for candidate_node in candidate_node_list:
+                        job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"]})
+                        score = self.compute_compatibility(job1, job2)
+
+                        if max_score <= score:
+                            max_score = score
+                            most_compatible_node = candidate_node
+
+                    self.dfs(most_compatible_node, model_type, path.copy())
         except Exception as e:
             raise e
-        finally:
-            self.disconnect_db()
+
+    def find_most_compatible_path(self, node, model_type, path):
+        node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
+        edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
+        job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
+
+        # Adding node_id to the path
+        path.append(node["node_id"])
+
+        # Adding the path to the self.model_path
+        if node["window_num"] == self.window_count[model_type] and node["node_type"] == "model":
+            self.model_paths[model_type].append(path)
+        else:
+            if node["node_type"] == "intermediate":
+                # We have to add the model_node in the same window
+                edge_list = edge_collection.find({"source": node["node_id"]})
+                model_node_id_list = [edge["destination"] for edge in edge_list]
+                path.extend(model_node_id_list)
+
+            # Finding a arbitrary node in the next window
+            if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
+                                                            "node_type": "intermediate"})
+            else:
+                candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type, "node_type": "model"})
+
+            # Ranking the nodes based on parametric compatibility
+            job1 = job_collection.find_one({"output_dsir": node["node_id"]})
+            most_compatible_node = None
+            max_score = 0
+            for candidate_node in candidate_node_list:
+                job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"]})
+                score = self.compute_compatibility(job1, job2)
+
+                if max_score <= score:
+                    max_score = score
+                    most_compatible_node = candidate_node
+            return self.find_most_compatible_path(most_compatible_node, model_type, path)
+
+    def compute_compatibility(self, job1, job2):
+        # TODO: Hardcoded here for bin, Need to check with Dr.Candan
+        threshold = self.config["rules"]["bin"]
+        match_counter = 0
+        total_counter = len(job1["variables"])
+        for key in job1["variables"]:
+            parameter_1 = job1["variables"][key]
+            parameter_2 = job2["variables"][key]
+            if abs(parameter_1 - parameter_2) <= threshold[key]:
+                match_counter = match_counter + 1
+        return match_counter / total_counter
+
+    def find_no_of_edges(self, path_1, path_2):
+        no_of_edges = 0
+        path_2_set = set(path_2)
+        edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
+        for node_id in path_1:
+            edge_list = edge_collection.find({"source": node_id})
+            candidate_node_id_list = [edge["destination"] for edge in edge_list]
+            for candidate_node_id in candidate_node_id_list:
+                if candidate_node_id in path_2_set:
+                    no_of_edges += 1
+        return no_of_edges
+
+    def find_model_path_score(self, path, model_type):
+        job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
+        score = 0
+        # TODO: Need to integrate WM score
+        for node_id in path:
+            job = job_collection.find_one({"output_dsir": node_id})
+            if job is not None:
+                score += job["relevance"]
+
+        normalized_score = score / self.window_count[model_type]
+        return normalized_score
