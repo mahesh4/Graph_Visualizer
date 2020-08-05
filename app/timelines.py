@@ -1,5 +1,6 @@
 from bson.objectid import ObjectId
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
+from itertools import chain, combinations
 import heapq
 import itertools
 import math
@@ -16,9 +17,61 @@ class Timelines:
         self.timelines = []
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee5ad3820c7f46abb64a069")})
 
+    def remove_nodes_overlap(self, timelines_index_list):
+        try:
+            dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
+            # TODO: Hardcoded here
+            model_type_list = ["hurricane", "flood", "human_mobility"]
+
+            for timelines_index in timelines_index_list:
+                index_list = timelines_index[2]
+                for i in range((len(index_list))):
+                    model_type = model_type_list[i]
+                    model_path = self.model_paths[model_type][index_list[i][0]]
+                    job_list = []
+                    for node_id in model_path:
+                        dsir = dsir_collection.find_one({"_id": node_id})
+                        start = dsir["metadata"]["temporal"]["begin"]
+                        end = dsir["metadata"]["temporal"]["end"]
+                        weight = 0
+                        # Calculating the no of edges the node has in the timeline
+                        for j in self.model_dependency_list[model_type]:
+                            up_model_type = model_type_list[j]
+                            up_model_path = self.model_paths[up_model_type][index_list[j][0]]
+                            weight += self.find_no_of_edges(up_model_path, model_path)
+                        job_list.append({"start": start, "end": end, "_id": dsir["_id"], "weight": weight})
+                    # Sorting the jobs based on end
+                    job_list = sorted(job_list, key=lambda k: k["end"], reverse=True)
+                    # Running Activity Scheduling Problem
+                    profit_list = [job_list[0]["weight"]]
+                    max_profit_job_list = [0]
+
+                    print(job_list)
+
+                    for idx in range(len(job_list)):
+                        comp_job_idx = None
+
+                        # TODO: Need to use Binary search instead of linear search to speed up search
+                        for comp_idx in reversed(range(idx)):
+                            if job_list[comp_idx]["end"] <= job_list[idx]["start"]:
+                                comp_job_idx = comp_idx
+                                break
+
+                        if comp_job_idx is not None:
+                            if profit_list[comp_job_idx] + job_list[idx]["weight"] > profit_list[idx - 1]:
+                                profit_list[idx] = profit_list[comp_job_idx] + job_list[idx]["weight"]
+                                max_profit_job_list[idx] = comp_job_idx
+                            else:
+                                profit_list[idx] = profit_list[idx - 1]
+                                max_profit_job_list[idx] = idx - 1
+
+                    print(max_profit_job_list)
+        except Exception as e:
+            raise e
+
     def get_top_k_timelines(self, k):
         try:
-            node_collection = self.GRAPH_CLIENT['model_graph']['node']
+            node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             timelines_index_list = self.generate_timelines(k)
 
@@ -29,11 +82,12 @@ class Timelines:
             for timelines_index in timelines_index_list:
                 timeline = []
                 score = timelines_index[0]
-                index_list = timelines_index[1]
+                index_list = [index for index, model_type in timelines_index[2]]
 
                 # Adding all the intermediate nodes to the stateful nodes path
                 for i in range(len(model_type_list)):
                     if self.config["model"][model_type_list[i]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                        print(index_list)
                         model_path = self.model_paths[model_type_list[i]][index_list[i]]
                         new_model_path = []
                         for node_id in model_path:
@@ -66,7 +120,6 @@ class Timelines:
                 timelines_list.append({"score": score, "links": timeline})
         except Exception as e:
             raise e
-
         return timelines_list
 
     def generate_timelines(self, k):
@@ -75,6 +128,8 @@ class Timelines:
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
             stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
+            # TODO: Hardcoded here
+            model_type_list = ["hurricane", "flood", "human_mobility"]
 
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
@@ -104,69 +159,153 @@ class Timelines:
                 for node in node_list:
                     self.find_most_compatible_path(node, model_type, [])
 
-            # Generating the doc_list for Fagin's algorithm
+            # Generating the doc_list for NRA algorithm
             doc_list = []
             for model_type in self.model_paths:
                 lst_score = []
                 for i in range(len(self.model_paths[model_type])):
                     # Finding the score for the path
                     score = self.find_model_path_score(self.model_paths[model_type][i], model_type)
-                    lst_score.append({i: score})
+                    lst_score.append({"index": i, "score": score, "model_type": model_type})
                 doc_list.append(lst_score)
 
-            doc_list = [sorted(lst, key=lambda k: list(k.values()), reverse=True) for lst in doc_list]
+            doc_list = [sorted(lst, key=lambda k: k["score"], reverse=True) for lst in doc_list]
+
             max_doc_list_len = max([len(lst) for lst in doc_list])
-
-            # Preprocessing doc_list so that all lists have equal length
-            # for lst in doc_list:
-            #     lst_len = len(lst)
-            #     if lst_len < max_doc_list_len:
-            #         lst.extend([{lst_len + 1: 0}] * (max_doc_list_len - len(lst)))
-
             # Running NRA
             top_k_timelines = []
             heapq.heapify(top_k_timelines)
-            k_score = 0
-
+            no_of_models = len(model_type_list)
             for row_idx in range(max_doc_list_len):
                 candidate_doc_list = [col[: row_idx + 1] if row_idx < len(col) else col[:] for col in doc_list]
-                for candidate_timeline in itertools.product(*candidate_doc_list):
-                    count = len([True for i in range(len(candidate_timeline)) if candidate_doc_list[i].index(candidate_timeline[i]) < row_idx])
-                    # Base Case, We had already visited this timeline
-                    if count == len(doc_list):
-                        continue
-                    else:
-                        compatibility, score = self.check_compatiblity(candidate_timeline)
-                        if compatibility and (k > len(top_k_timelines) or score > k_score):
-                            if 0 < len(top_k_timelines) == k:
-                                heapq.heappop(top_k_timelines)
+                for col_idx in range(len(candidate_doc_list)):
+                    iter_doc_list = list(candidate_doc_list)
+                    iter_doc_list[col_idx] = [candidate_doc_list[col_idx][row_idx] if row_idx < len(candidate_doc_list[col_idx]) else []]
 
-                            heapq.heappush(top_k_timelines, (score, [list(path.keys())[-1] for path in candidate_timeline]))
-                            k_score = heapq.nsmallest(1, top_k_timelines)[0][0]
-                            if len(top_k_timelines) == k:
-                                return top_k_timelines
-                # End of for
-            # End of for
+                    for idx in range(col_idx):
+                        iter_doc_list[idx] = iter_doc_list[idx][: row_idx]
+
+                    if len(iter_doc_list[col_idx][0]) == 0:
+                        continue
+
+                    for candidate_timeline in itertools.product(*iter_doc_list):
+                        power_set = list(self.power_set(candidate_timeline))
+                        power_set.reverse()
+                        up_score = sum([x["score"] for x in candidate_timeline])
+                        merged_timeline_subset_list = []
+                        for candidate_timeline_subset in power_set:
+                            m_flag = False
+                            for merged_timeline_subset in merged_timeline_subset_list:
+                                if self.check_subset_model([c_path["model_type"] for c_path in candidate_timeline_subset],
+                                                     [m_path["model_type"] for m_path in merged_timeline_subset]):
+                                    m_flag = True
+                                    break
+
+                            if not m_flag:
+                                # No Superset of the candidate_timeline_subset has been added to top_k_timelines
+                                compatibility, low_score = self.check_timeline_compatibility(candidate_timeline_subset)
+                                if compatibility:
+                                    top_k_flag = False
+                                    merged_timeline_subset_list.append(candidate_timeline_subset)
+                                    for i in range(len(top_k_timelines)):
+                                        top_timeline = top_k_timelines[i]
+                                        timeline = [(c_path["index"], c_path["model_type"]) for c_path in candidate_timeline_subset]
+                                        if self.check_subset(timeline, top_timeline[2]):
+                                            # print("already present ", top_timeline[2], timeline)
+                                            top_k_flag = True
+                                            break
+
+                                        if self.check_subset(top_timeline[2], timeline):
+                                            # print("subset ", top_timeline[2], timeline)
+                                            del top_k_timelines[i]
+                                            heapq.heapify(top_k_timelines)
+                                            heapq.heappush(top_k_timelines, (-low_score, -up_score, timeline))
+                                            top_k_flag = True
+                                            break
+                                    # End of loop
+
+                                    if not top_k_flag:
+                                        # print("new entry ", [(c_path["index"], c_path["model_type"]) for c_path in candidate_timeline_subset])
+                                        heapq.heappush(top_k_timelines, (-low_score, -up_score, [(c_path["index"], c_path["model_type"]) for c_path in
+                                                                                               candidate_timeline_subset]))
+                    # End of loop
+                # End of loop
+
+                # Criteria for ending the NRA early
+                if k < len(top_k_timelines):
+                    comp_timeline_count = 0
+                    timelines = heapq.nsmallest(k+1, top_k_timelines)
+                    for t_timeline in timelines[:k]:
+                        if len(t_timeline[2]) == no_of_models:
+                            comp_timeline_count += 1
+                        else:
+                            break
+
+                    if comp_timeline_count == k and timelines[k][1] >= timelines[k-1][0]:
+                        return timelines[:k]
+
         except Exception as e:
             raise e
-        # No of timelines is less than k
-        return top_k_timelines
 
-    def check_compatiblity(self, timeline):
-        # TODO: Hardcoded here
+        # No of timelines is less than k or there are some incompatible timelines in top_k_timelines
+        compatible_timelines = []
+        comp_timeline_count = k
+        while top_k_timelines:
+            t_timeline = heapq.heappop(top_k_timelines)
+            if len(t_timeline[2]) == no_of_models:
+                compatible_timelines.append(t_timeline)
+                comp_timeline_count -= 1
+                if comp_timeline_count == 0:
+                    break
+
+        return compatible_timelines
+
+    def merge_subtimelines(self, timeline1, timeline2):
+        """merge timeline1 with timeline2"""
+        timeline1_model_set = set([t1_node["model"] for t1_node in timeline1])
+        merged_timeline = timeline1
+        for t2_node in timeline2:
+            if t2_node["model"] not in timeline1_model_set:
+                timeline1.append(t2_node)
+
+    def check_subset_model(self, subset_list, set_list):
+        for e in subset_list:
+            if e not in set_list:
+                return False
+        return True
+
+    def check_subset(self, subset_list, set_list):
+        for subset_index, subset_model in subset_list:
+            flag = False
+            for set_index, set_model in set_list:
+                if set_index == subset_index and set_model == subset_model:
+                    flag = True
+                    break
+            if not flag:
+                return False
+        # End of loop
+        return True
+
+    def check_timeline_compatibility(self, timeline):
+        # TODO: Hardcoded here, Need to change better logic for compatibility
         model_type_list = ["hurricane", "flood", "human_mobility"]
-        score = 0
+        score = sum([timeline[i]["score"] for i in range(len(timeline))])
         for i in range(len(timeline)):
             model_type = model_type_list[i]
-            model_path_index = list(timeline[i].keys())[-1]
-            score += list(timeline[i].values())[-1]
+            model_path_index = timeline[i]["index"]
             for j in self.model_dependency_list[model_type]:
-                up_model_path_index = list(timeline[j].keys())[-1]
                 up_model_type = model_type_list[j]
-                no_of_edges = self.find_no_of_edges(self.model_paths[up_model_type][up_model_path_index],
-                                                    self.model_paths[model_type][model_path_index])
-                if no_of_edges < math.floor(self.window_count[model_type] / 2):
-                    return False, -1
+                up_model_path_index = None
+                for t_model_path in timeline:
+                    if t_model_path["model_type"] == up_model_type:
+                        up_model_path_index = t_model_path["index"]
+                        break
+
+                if up_model_path_index is not None:
+                    no_of_edges = self.find_no_of_edges(self.model_paths[up_model_type][up_model_path_index],
+                                                        self.model_paths[model_type][model_path_index])
+                    if no_of_edges < math.floor(self.window_count[model_type] / 2):
+                        return False, score
             # End of for
         # End of for
         return True, score
@@ -293,6 +432,7 @@ class Timelines:
         return no_of_edges
 
     def find_model_path_score(self, path, model_type):
+        """This is intra-actor compatibility. Score is calculated as the sum of relevance scores"""
         job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
         score = 0
         # TODO: Need to integrate WM score
@@ -303,3 +443,7 @@ class Timelines:
 
         normalized_score = score / self.window_count[model_type]
         return normalized_score
+
+    def power_set(self, iterable):
+        s = list(iterable)
+        return chain.from_iterable(combinations(s, r) for r in range(1, len(s) + 1))

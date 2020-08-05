@@ -10,7 +10,7 @@ class ModelGraph:
         self.GRAPH_CLIENT = graph_client
         # TODO: Hardcoded the model_dependency here and workflow_id here
         self.model_dependency_list = ['flood', 'hurricane', 'human_mobility']
-        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee5ad3820c7f46abb64a069")})
+        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee6d6d81811bd0c0559ebb6")})
 
     def create_node(self, dsir):
         """Function to convert the DSIR to a  node for the flow_graph_path"""
