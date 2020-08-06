@@ -42,6 +42,7 @@ def index():
 
 
 @app.route('/model_graph/', methods=['POST'])
+@app.route('/get/model_graph', methods=["POST"])
 def get_model_graph():
     # TODO: Need to generate graph for a specific worflow
     request_data = request.get_json()
@@ -59,6 +60,7 @@ def get_model_graph():
 
 
 @app.route('/model_graph/top_k_timelines', methods=['POST'])
+@app.route('/get/model_graph/timeline', methods=["POST"])
 def get_timeline():
     request_data = request.get_json()
     try:
