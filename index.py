@@ -78,14 +78,14 @@ def get_top_k_timelines():
         abort(500, {"status": e})
 
 
-@app.route("/model_graph/top_k_dsir_timelines", methods = ["POST"])
+@app.route("/model_graph/top_k_dsir_timelines", methods=["POST"])
 def get_top_k_dsir_timelines():
     try:
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
         timelines = Timelines(mongo_client, graph_client)
         if "dsir_id" in request_data and "number" in request_data:
-            response = timelines.get_top_k_dsir_timelines(request_data["dsir_id"], request_data["number"])
+            response = timelines.get_top_k_dsir_timelines(ObjectId(request_data["dsir_id"]), request_data["number"])
         else:
             raise Exception("Invalid arguments passed")
         return json.dumps(response)
