@@ -49,7 +49,7 @@ def get_model_graph():
         if "workflow_id" in request_data:
             request_data = request.get_json()
             mongo_client, graph_client = get_db()
-            model_graph = ModelGraph(mongo_client, graph_client, request_data["workflow_id"])
+            model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
             # Deleting any existing data in DB if any
             model_graph.delete_data()
             response = model_graph.generate_model_graph()
