@@ -139,7 +139,8 @@ def get_workflows():
     try:
         mongo_client, graph_client = get_db()
         workflow_db = mongo_client["ds_config"]["workflows"]
-        workflow_list = workflow_db.find({}, {"_id": 0})
+        workflow_list = list(workflow_db.find({}, {"_id": 0}))
+        print(workflow_list)
         return json.dumps(workflow_list)
     except Exception as e:
         abort(500, {'status': e})
