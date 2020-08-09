@@ -71,10 +71,16 @@ class Timelines:
 
     def get_top_k_timelines(self, k):
         try:
+            timelines_index_list = self.generate_top_k_timelines(k)
+            timelines_list = self.format_timelines_to_output(timelines_index_list)
+            return timelines_list
+        except Exception as e:
+            raise e
+
+    def format_timelines_to_output(self, timelines_index_list):
+        try:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-            timelines_index_list = self.generate_timelines(k)
-
             # TODO: Hardcoded here
             model_type_list = ["hurricane", "flood", "human_mobility"]
             timelines_list = []
@@ -122,15 +128,12 @@ class Timelines:
             raise e
         return timelines_list
 
-    def generate_timelines(self, k):
+    def generate_top_k_timelines(self, k):
         try:
             node_collection = self.GRAPH_CLIENT['model_graph']['node']
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
             stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
-            # TODO: Hardcoded here
-            model_type_list = ["hurricane", "flood", "human_mobility"]
-
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
@@ -159,6 +162,17 @@ class Timelines:
                 for node in node_list:
                     self.find_most_compatible_path(node, model_type, [])
 
+            # Getting the top K timelines index list
+            timelines_index_list = self.run_nra(k)
+            return timelines_index_list
+
+        except Exception as e:
+            raise e
+
+    def run_nra(self, k):
+        try:
+            # TODO: Hardcoded here
+            model_type_list = ["hurricane", "flood", "human_mobility"]
             # Generating the doc_list for NRA algorithm
             doc_list = []
             for model_type in self.model_paths:
@@ -197,7 +211,7 @@ class Timelines:
                             m_flag = False
                             for merged_timeline_subset in merged_timeline_subset_list:
                                 if self.check_subset_model([c_path["model_type"] for c_path in candidate_timeline_subset],
-                                                     [m_path["model_type"] for m_path in merged_timeline_subset]):
+                                                           [m_path["model_type"] for m_path in merged_timeline_subset]):
                                     m_flag = True
                                     break
 
@@ -227,23 +241,22 @@ class Timelines:
                                     if not top_k_flag:
                                         # print("new entry ", [(c_path["index"], c_path["model_type"]) for c_path in candidate_timeline_subset])
                                         heapq.heappush(top_k_timelines, (-low_score, -up_score, [(c_path["index"], c_path["model_type"]) for c_path in
-                                                                                               candidate_timeline_subset]))
+                                                                                                 candidate_timeline_subset]))
                     # End of loop
                 # End of loop
 
                 # Criteria for ending the NRA early
                 if k < len(top_k_timelines):
                     comp_timeline_count = 0
-                    timelines = heapq.nsmallest(k+1, top_k_timelines)
+                    timelines = heapq.nsmallest(k + 1, top_k_timelines)
                     for t_timeline in timelines[:k]:
                         if len(t_timeline[2]) == no_of_models:
                             comp_timeline_count += 1
                         else:
                             break
 
-                    if comp_timeline_count == k and timelines[k][1] >= timelines[k-1][0]:
+                    if comp_timeline_count == k and timelines[k][1] >= timelines[k - 1][0]:
                         return timelines[:k]
-
         except Exception as e:
             raise e
 
@@ -257,7 +270,6 @@ class Timelines:
                 comp_timeline_count -= 1
                 if comp_timeline_count == 0:
                     break
-
         return compatible_timelines
 
     def merge_subtimelines(self, timeline1, timeline2):
@@ -304,7 +316,9 @@ class Timelines:
                 if up_model_path_index is not None:
                     no_of_edges = self.find_no_of_edges(self.model_paths[up_model_type][up_model_path_index],
                                                         self.model_paths[model_type][model_path_index])
-                    if no_of_edges < math.floor(self.window_count[model_type] / 2):
+                    # if no_of_edges < math.floor(self.window_count[model_type] / 2):
+                    #     return False, score
+                    if no_of_edges > 0:
                         return False, score
             # End of for
         # End of for
@@ -447,3 +461,67 @@ class Timelines:
     def power_set(self, iterable):
         s = list(iterable)
         return chain.from_iterable(combinations(s, r) for r in range(1, len(s) + 1))
+
+    def generate_timelines(self):
+        """Function to generate all the model paths in the complete execution context"""
+        try:
+            node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
+            edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
+            stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
+            stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
+
+            # Perform DFS on each "stateful" model_type
+            for model_type in stateful_models:
+                visited = set()
+                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    for node in node_list:
+                        forward_edges = edge_collection.find({"source": node["node_id"]})
+                        destination_list = [edge["destination"] for edge in forward_edges]
+                        for destination_id in destination_list:
+                            destination = node_collection.find_one({"node_id": destination_id})
+                            if destination["model_type"] == model_type and destination_id not in visited:
+                                visited.add(destination_id)
+                                self.dfs(node, model_type, [])
+                else:
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                for node in node_list:
+                    self.dfs(node, model_type, [])
+
+            # Finding the most compatible paths on each "stateless" model_type
+            for model_type in stateless_models:
+                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                else:
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+
+                for node in node_list:
+                    self.find_most_compatible_path(node, model_type, [])
+
+        except Exception as e:
+            raise e
+
+    def get_top_k_dsir_timelines(self, dsir_id, k):
+        """Function to get the top K timelines for a particular dsir_id"""
+        try:
+            dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
+            dsir = dsir_collection.find_one({"_id": dsir_id})
+            model_type = dsir["metadata"]["model_type"]
+            self.generate_timelines()
+
+            # Stripping the model_paths for the particular model_type which doesn't consist of the dsir_id
+            new_model_path = []
+            for index, model_path in enumerate(self.model_paths[model_type]):
+                if dsir_id in model_path:
+                    new_model_path.append(model_path)
+
+            print(new_model_path)
+
+            self.model_paths[model_type] = new_model_path
+            # Getting the top K timelines
+            timelines_index_list = self.run_nra(k)
+            print(timelines_index_list)
+            timelines_list = self.format_timelines_to_output(timelines_index_list)
+            return timelines_list
+        except Exception as e:
+            raise e

@@ -44,26 +44,29 @@ def index():
 @app.route('/model_graph/', methods=['POST'])
 @app.route('/get/model_graph', methods=["POST"])
 def get_model_graph():
-    # TODO: Need to generate graph for a specific worflow
-    request_data = request.get_json()
     try:
-        mongo_client, graph_client = get_db()
-        model_graph = ModelGraph(mongo_client, graph_client)
-        # Deleting any existing data in DB if any
-        model_graph.delete_data()
-        response = model_graph.generate_model_graph()
-        # Generating window_num for nodes in model_graph
-        model_graph.generate_window_number()
-        return json.dumps(response)
+        request_data = request.get_json()
+        if "worflow_id" in request_data:
+            request_data = request.get_json()
+            mongo_client, graph_client = get_db()
+            model_graph = ModelGraph(mongo_client, graph_client, request_data["workflow_id"])
+            # Deleting any existing data in DB if any
+            model_graph.delete_data()
+            response = model_graph.generate_model_graph()
+            # Generating window_num for nodes in model_graph
+            model_graph.generate_window_number()
+            return json.dumps(response)
+        else:
+            raise Exception("Invalid arguments passed")
     except Exception as e:
         abort(500, {'status': e})
 
 
-@app.route('/model_graph/top_k_timelines', methods=['POST'])
-@app.route('/get/model_graph/timeline', methods=["POST"])
-def get_timeline():
-    request_data = request.get_json()
+@app.route("/model_graph/top_k_timelines", methods=["POST"])
+@app.route("/get/model_graph/timeline", methods=["POST"])
+def get_top_k_timelines():
     try:
+        request_data = request.get_json()
         mongo_client, graph_client = get_db()
         timelines = Timelines(mongo_client, graph_client)
         if "number" in request_data:
@@ -72,10 +75,25 @@ def get_timeline():
             raise Exception("Invalid arguments passed")
         return json.dumps(response)
     except Exception as e:
-        abort(500, {'status': e})
+        abort(500, {"status": e})
 
 
-@app.route('/get/database', methods=["GET"])
+@app.route("/model_graph/top_k_dsir_timelines", methods = ["POST"])
+def get_top_k_dsir_timelines():
+    try:
+        request_data = request.get_json()
+        mongo_client, graph_client = get_db()
+        timelines = Timelines(mongo_client, graph_client)
+        if "dsir_id" in request_data and "number" in request_data:
+            response = timelines.get_top_k_dsir_timelines(request_data["dsir_id"], request_data["number"])
+        else:
+            raise Exception("Invalid arguments passed")
+        return json.dumps(response)
+    except Exception as e:
+        abort(500, {"status": e})
+
+
+@app.route("/database/", methods=["GET"])
 def get_database():
     try:
         with open("config.json", "r") as fp:
@@ -88,7 +106,7 @@ def get_database():
         abort(500, {'status': e})
 
 
-@app.route('/change/database', methods=["POST"])
+@app.route("/database/change", methods=["POST"])
 def change_database():
     try:
         request_json = request.get_json()
@@ -112,10 +130,20 @@ def change_database():
 
         response = dict({"message": "IP updates successfully"})
         return json.dumps(response)
-
     except Exception as e:
         abort(500, {'status': e})
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', threaded=True)
+@app.route("/workflows/", methods=["GET"])
+def get_workflows():
+    try:
+        mongo_client, graph_client = get_db()
+        workflow_db = mongo_client["ds_config"]["workflows"]
+        workflow_list = workflow_db.find({}, {"_id": 0})
+        return json.dumps(workflow_list)
+    except Exception as e:
+        abort(500, {'status': e})
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", threaded=True)

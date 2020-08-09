@@ -2,7 +2,7 @@ from bson.objectid import ObjectId
 
 
 class ModelGraph:
-    def __init__(self, mongo_client, graph_client):
+    def __init__(self, mongo_client, graph_client, workflow_id):
         self.config = None
         self.OPTIMAL_PATHS = list()
         self.EDGE_COUNT = 0
@@ -10,7 +10,8 @@ class ModelGraph:
         self.GRAPH_CLIENT = graph_client
         # TODO: Hardcoded the model_dependency here and workflow_id here
         self.model_dependency_list = ['flood', 'hurricane', 'human_mobility']
-        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee6d6d81811bd0c0559ebb6")})
+        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+        self.workflow_id = workflow_id
 
     def create_node(self, dsir):
         """Function to convert the DSIR to a  node for the flow_graph_path"""
@@ -90,22 +91,21 @@ class ModelGraph:
                 self.update_node(dsir["_id"], "model", dsir["metadata"]["model_type"], "", "")
                 return node
 
-            if dsir['created_by'] == 'JobGateway':
-                for child_id in dsir['children']:
-                    dsir_child = dsir_collection.find_one({'_id': child_id})
+            if dsir["created_by"] == "JobGateway":
+                for child_id in dsir["children"]:
+                    dsir_child = dsir_collection.find_one({"_id": child_id})
 
-                    if dsir_child['created_by'] == 'PostSynchronizationManager':
+                    if dsir_child["created_by"] == "PostSynchronizationManager":
                         # The dsir_child is part of the graph. Now, we generate edge between them
-                        node['periods'][0]['connector'].append(
-                            {'connectTo': str(child_id), 'connectorType': "finish-start"})
+                        node["periods"][0]["connector"].append({"connectTo": str(child_id), "connectorType": "finish-start"})
 
                         # generating a edge_name
-                        edge_name = 'e' + str(self.EDGE_COUNT)
+                        edge_name = "e" + str(self.EDGE_COUNT)
                         self.EDGE_COUNT = self.EDGE_COUNT + 1
                         # storing the edge to the database
-                        self.store_edge(dsir['_id'], child_id, edge_name)
+                        self.store_edge(dsir["_id"], child_id, edge_name)
                         # Storing the dsir_child, its always a "model" node
-                        self.update_node(child_id, "model", dsir_child['metadata']['model_type'], '', edge_name)
+                        self.update_node(child_id, "model", dsir_child["metadata"]["model_type"], "", edge_name)
 
                         if self.config["model"][dsir["metadata"]["model_type"]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
                             # storing the dsir, its always a "intermediate" node
@@ -113,14 +113,14 @@ class ModelGraph:
 
                         else:
                             # storing the dsir, its always a "model" node
-                            self.update_node(dsir['_id'], "model", dsir['metadata']['model_type'], edge_name, "")
-                    elif dsir_child['created_by'] == 'AlignmentManager':
+                            self.update_node(dsir["_id"], "model", dsir["metadata"]["model_type"], edge_name, "")
+                    elif dsir_child["created_by"] == "AlignmentManager":
                         # Move forward to find the descendant DSIR which is created by the JobGateway
                         dsir_descendant_id_list = dsir_child['children']
                         for dsir_descendant_id in dsir_descendant_id_list:
-                            node['periods'][0]['connector'].append({
-                                'connectTo': str(dsir_descendant_id),
-                                'connectorType': "finish-start"
+                            node["periods"][0]["connector"].append({
+                                "connectTo": str(dsir_descendant_id),
+                                "connectorType": "finish-start"
                             })
                             # fetching the DSIR descendant
                             dsir_descendant = dsir_collection.find_one({'_id': dsir_descendant_id})
@@ -140,11 +140,9 @@ class ModelGraph:
                                 # The dsir_descendant is a "model" node
                                 self.update_node(dsir_descendant['_id'], "model", dsir_descendant['metadata']['model_type'], "", edge_name)
 
-            elif dsir['created_by'] == 'PostSynchronizationManager':
-                for child_id in dsir['children']:
-                    dsir_child = dsir_collection.find_one({'_id': child_id})  # This is a DSIR
-                    # created by AlignmentManager
-
+            elif dsir["created_by"] == "PostSynchronizationManager":
+                for child_id in dsir["children"]:
+                    dsir_child = dsir_collection.find_one({"_id": child_id})  # This is a DSIR created by AlignmentManager
                     # Move forward to find the descendant DSIR which is created by the JobGateway
                     dsir_descendant_id_list = dsir_child['children']
                     for dsir_descendant_id in dsir_descendant_id_list:
@@ -179,8 +177,11 @@ class ModelGraph:
         We check whether children DSIRs are created by PSM or not, if not, then the DSIR becomes a node"""
 
         try:
-            dsir_collection = self.MONGO_CLIENT['ds_results']['dsir']
-            dsir_list = list(dsir_collection.find({'created_by': {'$in': ['JobGateway', 'PostSynchronizationManager']}}))
+            dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
+            dsir_list = list(dsir_collection.find({
+                "created_by": {"$in": ["JobGateway", "PostSynchronizationManager"]},
+                "workflow_id": self.workflow_id
+            }))
             graph = list()
             for dsir in dsir_list:
                 # TODO: check if more than a single DSIR exists for a single model on a particular window
@@ -192,7 +193,7 @@ class ModelGraph:
                 graph.append(node)
             # End of for
             response = {"min_time": self.config["simulation_context"]["temporal"]["begin"],
-                "max_time": self.config["simulation_context"]["temporal"]["begin"], "graph": graph}
+                        "max_time": self.config["simulation_context"]["temporal"]["begin"], "graph": graph}
         except Exception as e:
             raise e
         return response
