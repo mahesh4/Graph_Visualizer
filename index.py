@@ -46,7 +46,7 @@ def index():
 def get_model_graph():
     try:
         request_data = request.get_json()
-        if "worflow_id" in request_data:
+        if "workflow_id" in request_data:
             request_data = request.get_json()
             mongo_client, graph_client = get_db()
             model_graph = ModelGraph(mongo_client, graph_client, request_data["workflow_id"])
