@@ -63,7 +63,6 @@ def get_model_graph():
 
 
 @app.route("/model_graph/top_k_timelines", methods=["POST"])
-@app.route("/get/model_graph/timeline", methods=["POST"])
 def get_top_k_timelines():
     try:
         request_data = request.get_json()
@@ -79,6 +78,7 @@ def get_top_k_timelines():
 
 
 @app.route("/model_graph/top_k_dsir_timelines", methods=["POST"])
+@app.route("/get/model_graph/timeline", methods=["POST"])
 def get_top_k_dsir_timelines():
     try:
         request_data = request.get_json()
@@ -139,7 +139,7 @@ def get_workflows():
     try:
         mongo_client, graph_client = get_db()
         workflow_db = mongo_client["ds_config"]["workflows"]
-        workflow_list = list(workflow_db.find({}, {"_id": 0}))
+        workflow_list = [str(workflow["_id"]) for workflow in list(workflow_db.find({}, {"_id": 1}))]
         print(workflow_list)
         return json.dumps(workflow_list)
     except Exception as e:
