@@ -318,7 +318,7 @@ class Timelines:
                                                         self.model_paths[model_type][model_path_index])
                     # if no_of_edges < math.floor(self.window_count[model_type] / 2):
                     #     return False, score
-                    if no_of_edges > 0:
+                    if no_of_edges == 0:
                         return False, score
             # End of for
         # End of for
