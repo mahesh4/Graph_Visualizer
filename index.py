@@ -67,12 +67,12 @@ def get_top_k_timelines():
     try:
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
-        timelines = Timelines(mongo_client, graph_client)
-        if "number" in request_data:
+        if "number" in request_data and "workflow_id" in request_data:
+            timelines = Timelines(mongo_client, graph_client, request_data["workflow_id"])
             response = timelines.get_top_k_timelines(request_data["number"])
+            return json.dumps(response)
         else:
             raise Exception("Invalid arguments passed")
-        return json.dumps(response)
     except Exception as e:
         abort(500, {"status": e})
 
@@ -83,12 +83,12 @@ def get_top_k_dsir_timelines():
     try:
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
-        timelines = Timelines(mongo_client, graph_client)
-        if "dsir_id" in request_data and "number" in request_data:
+        if "dsir_id" in request_data and "number" in request_data and "workflow_id" in request_data:
+            timelines = Timelines(mongo_client, graph_client, request_data["workflow_id"])
             response = timelines.get_top_k_dsir_timelines(ObjectId(request_data["dsir_id"]), request_data["number"])
+            return json.dumps(response)
         else:
             raise Exception("Invalid arguments passed")
-        return json.dumps(response)
     except Exception as e:
         abort(500, {"status": e})
 

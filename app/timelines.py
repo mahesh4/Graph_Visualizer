@@ -7,7 +7,7 @@ import math
 
 
 class Timelines:
-    def __init__(self, mongo_client, graph_client):
+    def __init__(self, mongo_client, graph_client, workflow_id):
         self.MONGO_CLIENT = mongo_client
         self.GRAPH_CLIENT = graph_client
         # TODO: Hard coded no of windows for each model
@@ -15,7 +15,7 @@ class Timelines:
         self.window_count = {"hurricane": 1, "flood": 5, "human_mobility": 6}
         self.model_paths = {"hurricane": [], "flood": [], "human_mobility": []}
         self.timelines = []
-        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId("5ee5ad3820c7f46abb64a069")})
+        self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId(workflow_id)})
 
     def remove_nodes_overlap(self, timelines_index_list):
         try:
