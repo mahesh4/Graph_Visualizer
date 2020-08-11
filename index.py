@@ -68,7 +68,7 @@ def get_top_k_timelines():
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
         if "number" in request_data and "workflow_id" in request_data:
-            timelines = Timelines(mongo_client, graph_client, request_data["workflow_id"])
+            timelines = Timelines(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
             response = timelines.get_top_k_timelines(request_data["number"])
             return json.dumps(response)
         else:
@@ -84,7 +84,7 @@ def get_top_k_dsir_timelines():
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
         if "dsir_id" in request_data and "number" in request_data and "workflow_id" in request_data:
-            timelines = Timelines(mongo_client, graph_client, request_data["workflow_id"])
+            timelines = Timelines(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
             response = timelines.get_top_k_dsir_timelines(ObjectId(request_data["dsir_id"]), request_data["number"])
             return json.dumps(response)
         else:
