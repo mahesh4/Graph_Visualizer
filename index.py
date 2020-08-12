@@ -151,7 +151,7 @@ def get_dsfr():
     try:
         request_data = request.get_json()
         mongo_client, graph_client = get_db()
-        if "timestamp" in request_data and "parent" in request_data:
+        if "timestamp" in request_data and "parent" in request_data and "workflow_id" in request_data:
             model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
             request_data["parent"] = [ObjectId(dsir_id) for dsir_id in request_data["parent"]]
             request_data["timestamp"] = int(request_data["timestamp"])
