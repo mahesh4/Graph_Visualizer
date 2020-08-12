@@ -516,7 +516,6 @@ class Timelines:
                     new_model_path.append(model_path)
 
             print(new_model_path)
-
             self.model_paths[model_type] = new_model_path
             # Getting the top K timelines
             timelines_index_list = self.run_nra(k)

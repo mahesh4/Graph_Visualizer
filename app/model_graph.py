@@ -234,7 +234,7 @@ class ModelGraph:
                         edge_list = edge_collection.find({'source': node["node_id"]})
                         for edge in edge_list:
                             # updating the window_num for the "model" node
-                            node_collection.update({'node_id': edge["destination"]}, {'$set': {'window_num': window}})
+                            node_collection.update({"node_id": edge["destination"]}, {"$set": {'window_num': window}})
 
                 # Performing temporal comparison to find the nodes for the next window
                 for i in range(len(self.model_dependency_list)):
@@ -250,5 +250,12 @@ class ModelGraph:
                 start_nodes = node_list
                 window += 1
 
+        except Exception as e:
+            raise e
+
+    def get_dsfr(self, timestamp, dsir_id_list):
+        try:
+            dsfr_collection = self.MONGO_CLIENT["ds_results"]["dsfr"]
+            return list(dsfr_collection.find({"parent": {"$in": dsir_id_list}, "timestamp": timestamp}))
         except Exception as e:
             raise e

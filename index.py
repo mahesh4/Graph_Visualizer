@@ -143,7 +143,29 @@ def get_workflows():
         print(workflow_list)
         return json.dumps(workflow_list)
     except Exception as e:
-        abort(500, {'status': e})
+        abort(500, {"status": e})
+
+
+@app.route("/dsfr", methods=["POST"])
+def get_dsfr():
+    try:
+        request_data = request.get_json()
+        mongo_client, graph_client = get_db()
+        if "timestamp" in request_data and "parent" in request_data:
+            model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
+            request_data["parent"] = [ObjectId(dsir_id) for dsir_id in request_data["parent"]]
+            request_data["timestamp"] = int(request_data["timestamp"])
+            dsfr_list = model_graph.get_dsfr(request_data["timestamp"], request_data["parent"])
+            response = []
+            for dsfr in dsfr_list:
+                for key in dsfr:
+                    if isinstance(dsfr[key], ObjectId):
+                        dsfr[key] = str(dsfr[key])
+                response.append(dsfr)
+
+            return json.dumps(response)
+    except Exception as e:
+        abort(500, {"status": e})
 
 
 if __name__ == "__main__":
