@@ -193,7 +193,7 @@ class ModelGraph:
                 graph.append(node)
             # End of for
             response = {"min_time": self.config["simulation_context"]["temporal"]["begin"],
-                        "max_time": self.config["simulation_context"]["temporal"]["begin"], "graph": graph}
+                        "max_time": self.config["simulation_context"]["temporal"]["end"], "graph": graph}
         except Exception as e:
             raise e
         return response
