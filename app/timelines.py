@@ -85,15 +85,16 @@ class Timelines:
             model_type_list = ["hurricane", "flood", "human_mobility"]
             timelines_list = []
 
+            print(timelines_index_list)
+
             for timelines_index in timelines_index_list:
                 timeline = []
-                score = timelines_index[0]
+                score = -timelines_index[0]
                 index_list = [index for index, model_type in timelines_index[2]]
 
                 # Adding all the intermediate nodes to the stateful nodes path
                 for i in range(len(model_type_list)):
                     if self.config["model"][model_type_list[i]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                        print(index_list)
                         model_path = self.model_paths[model_type_list[i]][index_list[i]]
                         new_model_path = []
                         for node_id in model_path:
@@ -101,8 +102,8 @@ class Timelines:
                             # We are not processing nor adding "intermediate" nodes present in the model_path directly, but we are adding them
                             # through adjacent_node_id_list
                             if node["node_type"] == "model":
-                                # All the forward adjacent nodes are "intermediate" nodes
-                                adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
+                                # All the backward adjacent nodes are "intermediate" nodes
+                                adjacent_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id}))
                                 new_model_path.append(node_id)
                                 new_model_path.extend(adjacent_node_id_list)
                         # Adding the new_model_path to the self.model_paths
