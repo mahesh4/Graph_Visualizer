@@ -32,13 +32,25 @@ def close_db(error):
         db.disconnect_db()
 
 
-@app.route('/', methods=['GET'])
+@app.route("/", methods=["GET"])
 def index():
     response = {
         'message': 'This service provided by the Emit lab, Arizona State '
                    'University. '
     }
     return response
+
+
+@app.route("/model_graph/delete", methods=["POST"])
+def delete_graph():
+    try:
+        request_data = request.get_json()
+        if "workflow_id" in request_data:
+            mongo_client, graph_client = get_db()
+            model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
+            model_graph.delete_graph()
+    except Exception as e:
+        abort(500, {"status": e})
 
 
 @app.route('/model_graph/', methods=['POST'])
@@ -50,11 +62,10 @@ def get_model_graph():
             request_data = request.get_json()
             mongo_client, graph_client = get_db()
             model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
-            # Deleting any existing data in DB if any
-            model_graph.delete_data()
-            response = model_graph.generate_model_graph()
-            # Generating window_num for nodes in model_graph
-            model_graph.generate_window_number()
+            response, generate = model_graph.generate_model_graph()
+            if generate:
+                # Generating window_num for nodes in model_graph
+                model_graph.generate_window_number()
             return json.dumps(response)
         else:
             raise Exception("Invalid arguments passed")

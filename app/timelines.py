@@ -12,10 +12,11 @@ class Timelines:
         self.GRAPH_CLIENT = graph_client
         # TODO: Hard coded no of windows for each model
         self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
-        self.window_count = {"hurricane": 1, "flood": 5, "human_mobility": 6}
+        self.window_count = self.GRAPH_CLIENT["model_graph"]["workflows"].find_one({"workflow_id": ObjectId(workflow_id)})["window_count"]
         self.model_paths = {"hurricane": [], "flood": [], "human_mobility": []}
         self.timelines = []
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId(workflow_id)})
+        self.workflow_id = workflow_id
 
     def remove_nodes_overlap(self, timelines_index_list):
         try:
@@ -45,8 +46,6 @@ class Timelines:
                     # Running Activity Scheduling Problem
                     profit_list = [job_list[0]["weight"]]
                     max_profit_job_list = [0]
-
-                    print(job_list)
 
                     for idx in range(len(job_list)):
                         comp_job_idx = None
@@ -84,9 +83,6 @@ class Timelines:
             # TODO: Hardcoded here
             model_type_list = ["hurricane", "flood", "human_mobility"]
             timelines_list = []
-
-            print(timelines_index_list)
-
             for timelines_index in timelines_index_list:
                 timeline = []
                 score = -timelines_index[0]
@@ -113,6 +109,7 @@ class Timelines:
                 for i in range(len(index_list)):
                     model_type = model_type_list[i]
                     model_path = self.model_paths[model_type][index_list[i]]
+                    print(model_type, model_path)
                     for node_id in model_path:
                         node = {"name": model_type, "_id": str(node_id), "destination": []}
                         adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
@@ -340,17 +337,17 @@ class Timelines:
                 # Adding the path to the self.model_path
                 self.model_paths[model_type].append(path)
             else:
-                forward_edges = edge_collection.find({"source": node["node_id"]})
+                forward_edges = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                 visited = set()
                 for edge in forward_edges:
-                    candidate_node = node_collection.find_one({"node_id": edge["destination"]})
+                    candidate_node = node_collection.find_one({"node_id": edge["destination"], "workflow_id": self.workflow_id})
                     if candidate_node["model_type"] == model_type:
                         if candidate_node["node_type"] == "model" and candidate_node["node_id"] not in visited:
                             visited.add(candidate_node["node_id"])
                             self.dfs(candidate_node, model_type, path.copy())
                         elif candidate_node["node_type"] == "intermediate":
                             # From an "intermediate" node there is only one outgoing edge to the "model" node of the same model_type
-                            desc_edge_list = edge_collection.find({"source": candidate_node["node_id"]})
+                            desc_edge_list = edge_collection.find({"source": candidate_node["node_id"], "workflow_id": self.workflow_id})
                             desc_nodes_id_list = [desc_edge["destination"] for desc_edge in desc_edge_list]
                             for desc_node_id in desc_nodes_id_list:
                                 if desc_node_id not in visited:
@@ -361,19 +358,19 @@ class Timelines:
                     # Finding a node in the next window based on parametric compatibility
                     if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
-                                                                    "node_type": "intermediate"})
+                                                                    "node_type": "intermediate", "workflow_id": self.workflow_id})
                     else:
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
-                                                                    "node_type": "model"})
+                                                                    "node_type": "model", "workflow_id": self.workflow_id})
                     # Ranking the nodes based on parametric compatibility
                     job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
                     dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
-                    dsir1 = dsir_collection.find_one({"_id": node["node_id"]})
-                    job1 = job_collection.find_one({"_id": dsir1["metadata"]["job_id"]})
+                    dsir1 = dsir_collection.find_one({"_id": node["node_id"], "workflow_id": self.workflow_id})
+                    job1 = job_collection.find_one({"_id": dsir1["metadata"]["job_id"], "workflow_id": self.workflow_id})
                     most_compatible_node = None
                     max_score = 0
                     for candidate_node in candidate_node_list:
-                        job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"]})
+                        job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"], "workflow_id": self.workflow_id})
                         score = self.compute_compatibility(job1, job2)
 
                         if max_score <= score:
@@ -398,23 +395,24 @@ class Timelines:
         else:
             if node["node_type"] == "intermediate":
                 # We have to add the model_node in the same window
-                edge_list = edge_collection.find({"source": node["node_id"]})
+                edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                 model_node_id_list = [edge["destination"] for edge in edge_list]
                 path.extend(model_node_id_list)
 
             # Finding a arbitrary node in the next window
             if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
-                                                            "node_type": "intermediate"})
+                                                            "node_type": "intermediate", "workflow_id": self.workflow_id})
             else:
-                candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type, "node_type": "model"})
+                candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type, "node_type": "model",
+                                                            "workflow_id": self.workflow_id})
 
             # Ranking the nodes based on parametric compatibility
-            job1 = job_collection.find_one({"output_dsir": node["node_id"]})
+            job1 = job_collection.find_one({"output_dsir": node["node_id"], "workflow_id": self.workflow_id})
             most_compatible_node = None
             max_score = 0
             for candidate_node in candidate_node_list:
-                job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"]})
+                job2 = job_collection.find_one({"output_dsir": candidate_node["node_id"], "workflow_id": self.workflow_id})
                 score = self.compute_compatibility(job1, job2)
 
                 if max_score <= score:
@@ -439,7 +437,7 @@ class Timelines:
         path_2_set = set(path_2)
         edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
         for node_id in path_1:
-            edge_list = edge_collection.find({"source": node_id})
+            edge_list = edge_collection.find({"source": node_id, "workflow_id": self.workflow_id})
             candidate_node_id_list = [edge["destination"] for edge in edge_list]
             for candidate_node_id in candidate_node_id_list:
                 if candidate_node_id in path_2_set:
@@ -452,7 +450,7 @@ class Timelines:
         score = 0
         # TODO: Need to integrate WM score
         for node_id in path:
-            job = job_collection.find_one({"output_dsir": node_id})
+            job = job_collection.find_one({"output_dsir": node_id, "workflow_id": self.workflow_id})
             if job is not None:
                 score += job["relevance"]
 
@@ -475,26 +473,30 @@ class Timelines:
             for model_type in stateful_models:
                 visited = set()
                 if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                     for node in node_list:
-                        forward_edges = edge_collection.find({"source": node["node_id"]})
+                        forward_edges = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         destination_list = [edge["destination"] for edge in forward_edges]
                         for destination_id in destination_list:
-                            destination = node_collection.find_one({"node_id": destination_id})
+                            destination = node_collection.find_one({"node_id": destination_id, "workflow_id": self.workflow_id})
                             if destination["model_type"] == model_type and destination_id not in visited:
                                 visited.add(destination_id)
                                 self.dfs(node, model_type, [])
                 else:
-                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                 for node in node_list:
                     self.dfs(node, model_type, [])
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
                 if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                 else:
-                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
 
                 for node in node_list:
                     self.find_most_compatible_path(node, model_type, [])
@@ -506,7 +508,7 @@ class Timelines:
         """Function to get the top K timelines for a particular dsir_id"""
         try:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
-            dsir = dsir_collection.find_one({"_id": dsir_id})
+            dsir = dsir_collection.find_one({"_id": dsir_id, "workflow_id": self.workflow_id})
             model_type = dsir["metadata"]["model_type"]
             self.generate_timelines()
 
@@ -516,7 +518,6 @@ class Timelines:
                 if dsir_id in model_path:
                     new_model_path.append(model_path)
 
-            print(new_model_path)
             self.model_paths[model_type] = new_model_path
             # Getting the top K timelines
             timelines_index_list = self.run_nra(k)
