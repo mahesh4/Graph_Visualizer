@@ -83,10 +83,11 @@ class Timelines:
             # TODO: Hardcoded here
             model_type_list = ["hurricane", "flood", "human_mobility"]
             timelines_list = []
+            
             for timelines_index in timelines_index_list:
                 timeline = []
                 score = -timelines_index[0]
-                index_list = [index for index, model_type in timelines_index[2]]
+                index_list = [index for index, score, model_type in timelines_index[2]]
 
                 # Adding all the intermediate nodes to the stateful nodes path
                 for i in range(len(model_type_list)):
@@ -109,13 +110,17 @@ class Timelines:
                 for i in range(len(index_list)):
                     model_type = model_type_list[i]
                     model_path = self.model_paths[model_type][index_list[i]]
-                    print(model_type, model_path)
                     for node_id in model_path:
-                        node = {"name": model_type, "_id": str(node_id), "destination": []}
+                        node = {"name": model_type, "_id": str(node_id), "destination": [], "source": []}
                         adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
+                        upstream_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id}))
                         for adjacent_node_id in adjacent_node_id_list:
                             if adjacent_node_id in timeline_node_set:
                                 node["destination"].append(str(adjacent_node_id))
+
+                        for upstream_node_id in upstream_node_id_list:
+                            if upstream_node_id in timeline_node_set:
+                                node["source"].append(str(upstream_node_id))
 
                         timeline.append(node)
                         # End of for
@@ -177,12 +182,11 @@ class Timelines:
                 lst_score = []
                 for i in range(len(self.model_paths[model_type])):
                     # Finding the score for the path
-                    score = self.find_model_path_score(self.model_paths[model_type][i], model_type)
+                    score = round(self.find_model_path_score(self.model_paths[model_type][i], model_type), 3)
                     lst_score.append({"index": i, "score": score, "model_type": model_type})
                 doc_list.append(lst_score)
 
             doc_list = [sorted(lst, key=lambda k: k["score"], reverse=True) for lst in doc_list]
-
             max_doc_list_len = max([len(lst) for lst in doc_list])
             # Running NRA
             top_k_timelines = []
@@ -190,6 +194,31 @@ class Timelines:
             no_of_models = len(model_type_list)
             for row_idx in range(max_doc_list_len):
                 candidate_doc_list = [col[: row_idx + 1] if row_idx < len(col) else col[:] for col in doc_list]
+
+                # Updating the up_score for all the rows in the top_k_timelines
+                del_list = []
+                for i, top_timeline in enumerate(top_k_timelines):
+                    top_timeline_model_type_list = [model_type for index, score, model_type in top_timeline[2]]
+                    new_up_score = 0
+                    if len(top_timeline_model_type_list) == no_of_models:
+                        continue
+                    else:
+                        del_flag = False
+                        for j in range(no_of_models):
+                            if model_type_list[j] not in top_timeline_model_type_list:
+                                if row_idx < len(candidate_doc_list[j]):
+                                    new_up_score += candidate_doc_list[j][row_idx]["score"]
+                                else:
+                                    del top_k_timelines[i]
+                                    del_flag = True
+                                    break
+                            else:
+                                index = top_timeline_model_type_list.index(model_type_list[j])
+                                new_up_score += top_timeline[2][index][1]
+
+                        if not del_flag:
+                            top_timeline[1] = round(-new_up_score, 3)
+
                 for col_idx in range(len(candidate_doc_list)):
                     iter_doc_list = list(candidate_doc_list)
                     iter_doc_list[col_idx] = [candidate_doc_list[col_idx][row_idx] if row_idx < len(candidate_doc_list[col_idx]) else []]
@@ -203,58 +232,47 @@ class Timelines:
                     for candidate_timeline in itertools.product(*iter_doc_list):
                         power_set = list(self.power_set(candidate_timeline))
                         power_set.reverse()
-                        up_score = sum([x["score"] for x in candidate_timeline])
-                        merged_timeline_subset_list = []
+                        up_score = round(sum([x["score"] for x in candidate_timeline]), 3)
                         for candidate_timeline_subset in power_set:
-                            m_flag = False
-                            for merged_timeline_subset in merged_timeline_subset_list:
-                                if self.check_subset_model([c_path["model_type"] for c_path in candidate_timeline_subset],
-                                                           [m_path["model_type"] for m_path in merged_timeline_subset]):
-                                    m_flag = True
-                                    break
+                            # All subset of the candidate_timeline has been added to top_k_timelines
+                            compatibility, low_score = self.check_timeline_compatibility(candidate_timeline_subset)
+                            if compatibility:
+                                top_k_flag = False
+                                for i in range(len(top_k_timelines)):
+                                    top_timeline = top_k_timelines[i]
+                                    timeline = [(c_path["index"], c_path["score"], c_path["model_type"]) for c_path in candidate_timeline_subset]
+                                    if self.check_set_equal(timeline, top_timeline[2]):
+                                        top_k_flag = True
+                                        break
+                                # End of loop
 
-                            if not m_flag:
-                                # No Superset of the candidate_timeline_subset has been added to top_k_timelines
-                                compatibility, low_score = self.check_timeline_compatibility(candidate_timeline_subset)
-                                if compatibility:
-                                    top_k_flag = False
-                                    merged_timeline_subset_list.append(candidate_timeline_subset)
-                                    for i in range(len(top_k_timelines)):
-                                        top_timeline = top_k_timelines[i]
-                                        timeline = [(c_path["index"], c_path["model_type"]) for c_path in candidate_timeline_subset]
-                                        if self.check_subset(timeline, top_timeline[2]):
-                                            # print("already present ", top_timeline[2], timeline)
-                                            top_k_flag = True
-                                            break
-
-                                        if self.check_subset(top_timeline[2], timeline):
-                                            # print("subset ", top_timeline[2], timeline)
-                                            del top_k_timelines[i]
-                                            heapq.heapify(top_k_timelines)
-                                            heapq.heappush(top_k_timelines, (-low_score, -up_score, timeline))
-                                            top_k_flag = True
-                                            break
-                                    # End of loop
-
-                                    if not top_k_flag:
-                                        # print("new entry ", [(c_path["index"], c_path["model_type"]) for c_path in candidate_timeline_subset])
-                                        heapq.heappush(top_k_timelines, (-low_score, -up_score, [(c_path["index"], c_path["model_type"]) for c_path in
-                                                                                                 candidate_timeline_subset]))
-                    # End of loop
+                                if not top_k_flag:
+                                    heapq.heappush(top_k_timelines, [-low_score, -up_score, [(c_path["index"], c_path["score"], c_path["model_type"])
+                                                                                             for c_path in candidate_timeline_subset]])
+                        # End of loop
                 # End of loop
+
+                heapq.heapify(top_k_timelines)
 
                 # Criteria for ending the NRA early
                 if k < len(top_k_timelines):
                     comp_timeline_count = 0
-                    timelines = heapq.nsmallest(k + 1, top_k_timelines)
+                    timelines = heapq.nsmallest(len(top_k_timelines), top_k_timelines)
                     for t_timeline in timelines[:k]:
                         if len(t_timeline[2]) == no_of_models:
                             comp_timeline_count += 1
                         else:
                             break
 
-                    if comp_timeline_count == k and timelines[k][1] >= timelines[k - 1][0]:
-                        return timelines[:k]
+                    if comp_timeline_count == k:
+                        terminate = True
+                        for t_timeline in timelines[k:]:
+                            if t_timeline[1] < timelines[k-1][0]:
+                                print("not terminating at ", row_idx, t_timeline, timelines[k-1])
+                                terminate = False
+                                break
+                        if terminate:
+                            return timelines[:k]
         except Exception as e:
             raise e
 
@@ -296,10 +314,27 @@ class Timelines:
         # End of loop
         return True
 
+    def check_set_equal(self, subset_list, set_list):
+        if len(subset_list) != len(set_list):
+            return False
+        for subset_index, subset_score, subset_model in subset_list:
+            flag = False
+            for set_index, set_score, set_model in set_list:
+                if set_index == subset_index and set_model == subset_model:
+                    flag = True
+                    break
+            # End of loop
+
+            if not flag:
+                return False
+        # End of loop
+        return True
+
     def check_timeline_compatibility(self, timeline):
         # TODO: Hardcoded here, Need to change better logic for compatibility
         model_type_list = ["hurricane", "flood", "human_mobility"]
         score = sum([timeline[i]["score"] for i in range(len(timeline))])
+        total_edges = 0
         for i in range(len(timeline)):
             model_type = model_type_list[i]
             model_path_index = timeline[i]["index"]
@@ -317,7 +352,7 @@ class Timelines:
                     # if no_of_edges < math.floor(self.window_count[model_type] / 2):
                     #     return False, score
                     if no_of_edges == 0:
-                        return False, score
+                        return False, 0
             # End of for
         # End of for
         return True, score
@@ -521,8 +556,43 @@ class Timelines:
             self.model_paths[model_type] = new_model_path
             # Getting the top K timelines
             timelines_index_list = self.run_nra(k)
-            print(timelines_index_list)
             timelines_list = self.format_timelines_to_output(timelines_index_list)
             return timelines_list
+        except Exception as e:
+            raise e
+
+    def get_top_k_timelines_test(self, K):
+        try:
+            doc_list = []
+            self.generate_timelines()
+            for model_type in self.model_paths:
+                lst_score = []
+                for i in range(len(self.model_paths[model_type])):
+                    # Finding the score for the path
+                    score = round(self.find_model_path_score(self.model_paths[model_type][i], model_type), 3)
+                    lst_score.append({"index": i, "score": score, "model_type": model_type})
+                doc_list.append(lst_score)
+
+            doc_list = [sorted(lst, key=lambda k: k["score"], reverse=True) for lst in doc_list]
+            top_k_timelines = []
+            top_k_score = 0
+            print(doc_list)
+            for candidate_timeline in itertools.product(*doc_list):
+                compatibility, low_score = self.check_timeline_compatibility(candidate_timeline)
+                if compatibility:
+                    score = sum([model_path["score"] for model_path in candidate_timeline])
+                    if len(top_k_timelines) < K:
+                        top_k_timelines.append([score, [(model_path["index"], model_path["model_type"]) for model_path in candidate_timeline]])
+                        top_k_timelines = sorted(top_k_timelines, key=lambda k: k[0], reverse=True)
+                        top_k_score = top_k_timelines[-1][0]
+                    elif score > top_k_score:
+                        del top_k_timelines[-1]
+                        top_k_timelines.append([score, [(model_path["index"], model_path["model_type"]) for model_path in candidate_timeline]])
+                        top_k_timelines = sorted(top_k_timelines, key=lambda k: k[0], reverse=True)
+                        top_k_score = top_k_timelines[-1][0]
+
+            top_k_timelines = sorted(top_k_timelines, key=lambda k: k[0], reverse=True)
+            print(top_k_timelines)
+
         except Exception as e:
             raise e
