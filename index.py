@@ -62,10 +62,8 @@ def get_model_graph():
             request_data = request.get_json()
             mongo_client, graph_client = get_db()
             model_graph = ModelGraph(mongo_client, graph_client, ObjectId(request_data["workflow_id"]))
-            response, generate = model_graph.generate_model_graph()
-            if generate:
-                # Generating window_num for nodes in model_graph
-                model_graph.generate_window_number()
+            response = model_graph.generate_model_graph()
+
             return json.dumps(response)
         else:
             raise Exception("Invalid arguments passed")

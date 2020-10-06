@@ -190,15 +190,17 @@ class ModelGraph:
             mg_workflow_collection = self.GRAPH_CLIENT["model_graph"]["workflows"]
             workflow = mg_workflow_collection.find_one({"workflow_id": self.workflow_id})
 
-            # Check if the workflow is not present in DB
-            if workflow is None:
-                store = True
-                mg_workflow_collection.insert({"workflow_id": self.workflow_id})
-
             dsir_list = list(dsir_collection.find({
                 "created_by": {"$in": ["JobGateway", "PostSynchronizationManager"]},
                 "workflow_id": self.workflow_id
             }))
+            dsir_list_length = len(dsir_list)
+
+            # We need to generate a new graph if there are new dsirs from MongoDB
+            if workflow is None or workflow["total_dsirs"] < dsir_list_length:
+                store = True
+                mg_workflow_collection.update({"workflow_id": self.workflow_id}, {"$set": {"total_dsirs": dsir_list_length}}, upsert=True)
+
             graph = list()
             for dsir in dsir_list:
                 # TODO: check if more than a single DSIR exists for a single model on a particular window
@@ -210,10 +212,15 @@ class ModelGraph:
                 graph.append(node)
             # End of for
             response = {"min_time": self.config["simulation_context"]["temporal"]["begin"],
-                        "max_time": self.config["simulation_context"]["temporal"]["end"], "graph": graph}
+                        "max_time": self.config["simulation_context"]["temporal"]["end"], "graph": graph, "generate": store}
+
+            if store:
+                # Generating window_num for nodes in model_graph
+                self.generate_window_number()
+
         except Exception as e:
             raise e
-        return response, store
+        return response
 
     def delete_graph(self):
         """Deleting the data in model_graph database in GRAPH_CLIENT"""
