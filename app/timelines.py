@@ -10,10 +10,10 @@ class Timelines:
     def __init__(self, mongo_client, graph_client, workflow_id):
         self.MONGO_CLIENT = mongo_client
         self.GRAPH_CLIENT = graph_client
-        # TODO: Hard coded no of windows for each model
+        # TODO: Hard coded the dependency of model relationship
         self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
         self.window_count = self.GRAPH_CLIENT["model_graph"]["workflows"].find_one({"workflow_id": ObjectId(workflow_id)})["window_count"]
-        self.model_paths = {"hurricane": [], "flood": [], "human_mobility": []}
+        self.model_paths = {model: [] for model in self.window_count.keys()}
         self.timelines = []
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId(workflow_id)})
         self.workflow_id = workflow_id
@@ -80,7 +80,7 @@ class Timelines:
         try:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-            # TODO: Hardcoded here
+            # TODO: Need to fix hardcoded values
             model_type_list = ["hurricane", "flood", "human_mobility"]
             timelines_list = []
             
@@ -100,7 +100,8 @@ class Timelines:
                             # through adjacent_node_id_list
                             if node["node_type"] == "model":
                                 # All the backward adjacent nodes are "intermediate" nodes
-                                adjacent_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id}))
+                                adjacent_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id,
+                                                                                                         "workflow_id": self.workflow_id}))
                                 new_model_path.append(node_id)
                                 new_model_path.extend(adjacent_node_id_list)
                         # Adding the new_model_path to the self.model_paths
@@ -112,8 +113,10 @@ class Timelines:
                     model_path = self.model_paths[model_type][index_list[i]]
                     for node_id in model_path:
                         node = {"name": model_type, "_id": str(node_id), "destination": [], "source": []}
-                        adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id}))
-                        upstream_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id}))
+                        adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id,
+                                                                                                      "workflow_id": self.workflow_id}))
+                        upstream_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id,
+                                                                                                 "workflow_id": self.workflow_id}))
                         for adjacent_node_id in adjacent_node_id_list:
                             if adjacent_node_id in timeline_node_set:
                                 node["destination"].append(str(adjacent_node_id))
@@ -141,26 +144,30 @@ class Timelines:
             for model_type in stateful_models:
                 visited = set()
                 if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                     for node in node_list:
-                        forward_edges = edge_collection.find({"source": node["node_id"]})
+                        forward_edges = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         destination_list = [edge["destination"] for edge in forward_edges]
                         for destination_id in destination_list:
-                            destination = node_collection.find_one({"node_id": destination_id})
+                            destination = node_collection.find_one({"node_id": destination_id, "workflow_id": self.workflow_id})
                             if destination["model_type"] == model_type and destination_id not in visited:
                                 visited.add(destination_id)
                                 self.dfs(node, model_type, [])
                 else:
-                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                 for node in node_list:
                     self.dfs(node, model_type, [])
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
                 if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
                 else:
-                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type})
+                    node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
+                                                      "workflow_id": self.workflow_id})
 
                 for node in node_list:
                     self.find_most_compatible_path(node, model_type, [])
@@ -174,8 +181,7 @@ class Timelines:
 
     def run_nra(self, k):
         try:
-            # TODO: Hardcoded here
-            model_type_list = ["hurricane", "flood", "human_mobility"]
+            model_type_list = list(self.window_count.keys())
             # Generating the doc_list for NRA algorithm
             doc_list = []
             for model_type in self.model_paths:
@@ -332,7 +338,7 @@ class Timelines:
 
     def check_timeline_compatibility(self, timeline):
         # TODO: Hardcoded here, Need to change better logic for compatibility
-        model_type_list = ["hurricane", "flood", "human_mobility"]
+        model_type_list = list(self.window_count.keys())
         score = sum([timeline[i]["score"] for i in range(len(timeline))])
         total_edges = 0
         for i in range(len(timeline)):
@@ -355,10 +361,10 @@ class Timelines:
                         return False, 0
             # End of for
         # End of for
-        return True, score
+        return True, round(score, 3)
 
     def dfs(self, node, model_type, path):
-        """Function to perform dfs
+        """Function to perform dfs. The dfs path consist of both "intermediate" and "model" nodes
         NOTE: We don't maintain visited list because the graph is acyclic. Cycles occur during clustering and there is a local visited set
         maintained"""
         try:
