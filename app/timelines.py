@@ -81,13 +81,18 @@ class Timelines:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             # TODO: Need to fix hardcoded values
-            model_type_list = ["hurricane", "flood", "human_mobility"]
+            model_type_list = list(self.window_count.keys())
             timelines_list = []
             
             for timelines_index in timelines_index_list:
                 timeline = []
                 score = -timelines_index[0]
-                index_list = [index for index, score, model_type in timelines_index[2]]
+                index_list = []
+                for model in model_type_list:
+                    for index, score, model_type in timelines_index[2]:
+                        if model == model_type:
+                            index_list.append(index)
+                            break
 
                 # Adding all the intermediate nodes to the stateful nodes path
                 for i in range(len(model_type_list)):
@@ -110,13 +115,14 @@ class Timelines:
                 timeline_node_set = set.union(*map(set, [self.model_paths[model_type_list[i]][index_list[i]] for i in range(len(index_list))]))
                 for i in range(len(index_list)):
                     model_type = model_type_list[i]
-                    model_path = self.model_paths[model_type][index_list[i]]
+                    model_path = self.model_paths[model_type_list[i]][index_list[i]]
                     for node_id in model_path:
                         node = {"name": model_type, "_id": str(node_id), "destination": [], "source": []}
-                        adjacent_node_id_list = map(lambda x: x["destination"], edge_collection.find({"source": node_id,
-                                                                                                      "workflow_id": self.workflow_id}))
-                        upstream_node_id_list = map(lambda x: x["source"], edge_collection.find({"destination": node_id,
-                                                                                                 "workflow_id": self.workflow_id}))
+                        adjacent_node_id_list = list(map(lambda x: x["destination"], edge_collection.find({"source": node_id,
+                                                                                                      "workflow_id": self.workflow_id})))
+                        upstream_node_id_list = list(map(lambda x: x["source"], edge_collection.find({"destination": node_id,
+                                                                                                 "workflow_id": self.workflow_id})))
+
                         for adjacent_node_id in adjacent_node_id_list:
                             if adjacent_node_id in timeline_node_set:
                                 node["destination"].append(str(adjacent_node_id))
@@ -377,8 +383,9 @@ class Timelines:
             if node["window_num"] == self.window_count[model_type] and node["node_type"] == "model":
                 # Adding the path to the self.model_path
                 self.model_paths[model_type].append(path)
+                return
             else:
-                forward_edges = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
+                forward_edges = list(edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id}))
                 visited = set()
                 for edge in forward_edges:
                     candidate_node = node_collection.find_one({"node_id": edge["destination"], "workflow_id": self.workflow_id})
@@ -395,7 +402,7 @@ class Timelines:
                                     visited.add(desc_node_id)
                                     self.dfs(candidate_node, model_type, path.copy())
 
-                if node["node_type"] == "model" and len(list(forward_edges)) == 0:
+                if node["node_type"] == "model" and len(forward_edges) == 0:
                     # Finding a node in the next window based on parametric compatibility
                     if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
@@ -582,7 +589,7 @@ class Timelines:
             doc_list = [sorted(lst, key=lambda k: k["score"], reverse=True) for lst in doc_list]
             top_k_timelines = []
             top_k_score = 0
-            print(doc_list)
+
             for candidate_timeline in itertools.product(*doc_list):
                 compatibility, low_score = self.check_timeline_compatibility(candidate_timeline)
                 if compatibility:
@@ -598,7 +605,7 @@ class Timelines:
                         top_k_score = top_k_timelines[-1][0]
 
             top_k_timelines = sorted(top_k_timelines, key=lambda k: k[0], reverse=True)
-            print(top_k_timelines)
+
 
         except Exception as e:
             raise e
