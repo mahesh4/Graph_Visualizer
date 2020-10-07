@@ -343,7 +343,6 @@ class Timelines:
         return True
 
     def check_timeline_compatibility(self, timeline):
-        # TODO: Hardcoded here, Need to change better logic for compatibility
         model_type_list = list(self.window_count.keys())
         score = sum([timeline[i]["score"] for i in range(len(timeline))])
         total_edges = 0

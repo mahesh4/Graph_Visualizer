@@ -149,7 +149,8 @@ class ModelGraph:
 
             elif dsir["created_by"] == "PostSynchronizationManager":
                 for child_id in dsir["children"]:
-                    dsir_child = dsir_collection.find_one({"_id": child_id, "workflow_id": self.workflow_id})  # This is a DSIR created by AlignmentManager
+                    dsir_child = dsir_collection.find_one(
+                        {"_id": child_id, "workflow_id": self.workflow_id})  # This is a DSIR created by AlignmentManager
                     # Move forward to find the descendant DSIR which is created by the JobGateway
                     dsir_descendant_id_list = dsir_child["children"]
                     for dsir_descendant_id in dsir_descendant_id_list:
@@ -240,14 +241,14 @@ class ModelGraph:
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
             mg_workflow_collection = self.GRAPH_CLIENT["model_graph"]["workflows"]
-
-            dsir_list = dsir_collection.find({"metadata.temporal.begin": self.config["simulation_context"]["temporal"]["begin"],
-                                              "created_by": "JobGateway", "workflow_id": self.workflow_id})
+            dsir_list = list(dsir_collection.find({"metadata.temporal.begin": self.config["simulation_context"]["temporal"]["begin"],
+                                              "created_by": "JobGateway", "workflow_id": self.workflow_id}))
             start_nodes = [dsir["_id"] for dsir in dsir_list]
             model_window_start = [self.config["simulation_context"]["temporal"]["begin"]] * len(self.model_dependency_list)
             model_window_width = [model_config["output_window"] for model_config in self.config["model"].values()]
             window = 1
-            window_count = {model: 1 for model in self.model_dependency_list}
+
+            window_count = {model: 1 for model in set([dsir["metadata"]["model_type"] for dsir in dsir_list])}
             while len(start_nodes) > 0:
                 node_list = []
                 for node_id in start_nodes:
@@ -261,7 +262,8 @@ class ModelGraph:
                         edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         for edge in edge_list:
                             # updating the window_num for the "model" node
-                            node_collection.update({"node_id": edge["destination"], "workflow_id": self.workflow_id}, {"$set": {"window_num": window}})
+                            node_collection.update({"node_id": edge["destination"], "workflow_id": self.workflow_id},
+                                                   {"$set": {"window_num": window}})
 
                 # Performing temporal comparison to find the nodes for the next window
                 for i in range(len(self.model_dependency_list)):
