@@ -148,7 +148,9 @@ def get_workflows():
     try:
         mongo_client, graph_client = get_db()
         workflow_db = mongo_client["ds_config"]["workflows"]
-        workflow_list = [str(workflow["_id"]) for workflow in list(workflow_db.find({}, {"_id": 1}))]
+        workflow_list = list(workflow_db.find({}))
+        for workflow in workflow_list:
+            workflow["_id"] = str(workflow["_id"])
         print(workflow_list)
         return json.dumps(workflow_list)
     except Exception as e:
