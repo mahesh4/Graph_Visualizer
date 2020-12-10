@@ -3,7 +3,7 @@ import json
 import os
 from sshtunnel import SSHTunnelForwarder
 
-MONGO_KEYFILE = "dsworker_rsa"
+MONGO_KEYFILE = "dummy"
 MONGO_IP = None
 GRAPH_IP = None
 

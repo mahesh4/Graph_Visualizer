@@ -15,7 +15,8 @@ CORS(app)
 
 
 def get_db():
-    """Opens a new database connection if there is none yet for the
+    """
+    Opens a new database connection if there is none yet for the
     current application context.
     """
     if not hasattr(g, 'db'):

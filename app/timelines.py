@@ -4,30 +4,33 @@ from itertools import chain, combinations
 import heapq
 import itertools
 import math
+from app import utils
 
 
 class Timelines:
     def __init__(self, mongo_client, graph_client, workflow_id):
         self.MONGO_CLIENT = mongo_client
         self.GRAPH_CLIENT = graph_client
-        # TODO: Hard coded the dependency of model relationship
-        self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
         self.window_count = self.GRAPH_CLIENT["model_graph"]["workflows"].find_one({"workflow_id": ObjectId(workflow_id)})["window_count"]
         self.model_paths = {model: [] for model in self.window_count.keys()}
         self.timelines = []
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId(workflow_id)})
+        self.model_list = [model_config["name"] for model_config in self.config["model_settings"].values()]
+        self.model_type_to_id = utils.convert_id_to_model_type(self.config)
+        # self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
+        self.model_dependency_list = {}
+        for model_config in self.config["model_settings"].values():
+            self.model_dependency_list[model_config["name"]] = [self.model_list.index(upstream_model) for upstream_model in model_config["upstream_models"].values()]
         self.workflow_id = workflow_id
 
     def remove_nodes_overlap(self, timelines_index_list):
+        # TODO: Work in progress
         try:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
-            # TODO: Hardcoded here
-            model_type_list = ["hurricane", "flood", "human_mobility"]
-
             for timelines_index in timelines_index_list:
                 index_list = timelines_index[2]
                 for i in range((len(index_list))):
-                    model_type = model_type_list[i]
+                    model_type = self.model_list[i]
                     model_path = self.model_paths[model_type][index_list[i][0]]
                     job_list = []
                     for node_id in model_path:
@@ -37,7 +40,7 @@ class Timelines:
                         weight = 0
                         # Calculating the no of edges the node has in the timeline
                         for j in self.model_dependency_list[model_type]:
-                            up_model_type = model_type_list[j]
+                            up_model_type = self.model_list[j]
                             up_model_path = self.model_paths[up_model_type][index_list[j][0]]
                             weight += self.find_no_of_edges(up_model_path, model_path)
                         job_list.append({"start": start, "end": end, "_id": dsir["_id"], "weight": weight})
@@ -80,24 +83,22 @@ class Timelines:
         try:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-            # TODO: Need to fix hardcoded values
-            model_type_list = list(self.window_count.keys())
             timelines_list = []
-            
+
             for timelines_index in timelines_index_list:
                 timeline = []
                 score = -timelines_index[0]
                 index_list = []
-                for model in model_type_list:
+                for model in self.model_list:
                     for index, score, model_type in timelines_index[2]:
                         if model == model_type:
                             index_list.append(index)
                             break
 
                 # Adding all the intermediate nodes to the stateful nodes path
-                for i in range(len(model_type_list)):
-                    if self.config["model"][model_type_list[i]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
-                        model_path = self.model_paths[model_type_list[i]][index_list[i]]
+                for i in range(len(self.model_list)):
+                    if self.config["model_settings"][self.model_type_to_id[self.model_list[i]]]["psm_settings"]["psm_strategy"] == "cluster":
+                        model_path = self.model_paths[self.model_list[i]][index_list[i]]
                         new_model_path = []
                         for node_id in model_path:
                             node = node_collection.find_one({"node_id": node_id})
@@ -110,18 +111,18 @@ class Timelines:
                                 new_model_path.append(node_id)
                                 new_model_path.extend(adjacent_node_id_list)
                         # Adding the new_model_path to the self.model_paths
-                        self.model_paths[model_type_list[i]][index_list[i]] = new_model_path
+                        self.model_paths[self.model_list[i]][index_list[i]] = new_model_path
 
-                timeline_node_set = set.union(*map(set, [self.model_paths[model_type_list[i]][index_list[i]] for i in range(len(index_list))]))
+                timeline_node_set = set.union(*map(set, [self.model_paths[self.model_list[i]][index_list[i]] for i in range(len(index_list))]))
                 for i in range(len(index_list)):
-                    model_type = model_type_list[i]
-                    model_path = self.model_paths[model_type_list[i]][index_list[i]]
+                    model_type = self.model_list[i]
+                    model_path = self.model_paths[model_type][index_list[i]]
                     for node_id in model_path:
                         node = {"name": model_type, "_id": str(node_id), "destination": [], "source": []}
                         adjacent_node_id_list = list(map(lambda x: x["destination"], edge_collection.find({"source": node_id,
-                                                                                                      "workflow_id": self.workflow_id})))
+                                                                                                           "workflow_id": self.workflow_id})))
                         upstream_node_id_list = list(map(lambda x: x["source"], edge_collection.find({"destination": node_id,
-                                                                                                 "workflow_id": self.workflow_id})))
+                                                                                                      "workflow_id": self.workflow_id})))
 
                         for adjacent_node_id in adjacent_node_id_list:
                             if adjacent_node_id in timeline_node_set:
@@ -144,12 +145,12 @@ class Timelines:
         try:
             node_collection = self.GRAPH_CLIENT['model_graph']['node']
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-            stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
-            stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
+            stateful_models = [model_config["name"] for model_name, model_config in self.config["model_settings"].items() if model_config["stateful"]]
+            stateless_models = [model_config["name"] for model_name, model_config in self.config["model_settings"].items() if not model_config["stateful"]]
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
-                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -168,7 +169,7 @@ class Timelines:
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
-                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:
@@ -187,7 +188,7 @@ class Timelines:
 
     def run_nra(self, k):
         try:
-            model_type_list = list(self.window_count.keys())
+            model_type_list = self.model_list
             # Generating the doc_list for NRA algorithm
             doc_list = []
             for model_type in self.model_paths:
@@ -279,8 +280,8 @@ class Timelines:
                     if comp_timeline_count == k:
                         terminate = True
                         for t_timeline in timelines[k:]:
-                            if t_timeline[1] < timelines[k-1][0]:
-                                print("not terminating at ", row_idx, t_timeline, timelines[k-1])
+                            if t_timeline[1] < timelines[k - 1][0]:
+                                print("not terminating at ", row_idx, t_timeline, timelines[k - 1])
                                 terminate = False
                                 break
                         if terminate:
@@ -343,11 +344,11 @@ class Timelines:
         return True
 
     def check_timeline_compatibility(self, timeline):
-        model_type_list = list(self.window_count.keys())
+        model_type_list = self.model_list
         score = sum([timeline[i]["score"] for i in range(len(timeline))])
         total_edges = 0
         for i in range(len(timeline)):
-            model_type = model_type_list[i]
+            model_type = timeline[i]["model_type"]
             model_path_index = timeline[i]["index"]
             for j in self.model_dependency_list[model_type]:
                 up_model_type = model_type_list[j]
@@ -362,11 +363,13 @@ class Timelines:
                                                         self.model_paths[model_type][model_path_index])
                     # if no_of_edges < math.floor(self.window_count[model_type] / 2):
                     #     return False, score
-                    if no_of_edges == 0:
-                        return False, 0
+                    total_edges += no_of_edges
             # End of for
         # End of for
-        return True, round(score, 3)
+        if total_edges == 0:
+            return False, 0
+        else:
+            return True, round(score, 3)
 
     def dfs(self, node, model_type, path):
         """Function to perform dfs. The dfs path consist of both "intermediate" and "model" nodes
@@ -403,7 +406,7 @@ class Timelines:
 
                 if node["node_type"] == "model" and len(forward_edges) == 0:
                     # Finding a node in the next window based on parametric compatibility
-                    if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                                     "node_type": "intermediate", "workflow_id": self.workflow_id})
                     else:
@@ -447,7 +450,7 @@ class Timelines:
                 path.extend(model_node_id_list)
 
             # Finding a arbitrary node in the next window
-            if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+            if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                             "node_type": "intermediate", "workflow_id": self.workflow_id})
             else:
@@ -468,8 +471,7 @@ class Timelines:
             return self.find_most_compatible_path(most_compatible_node, model_type, path)
 
     def compute_compatibility(self, job1, job2):
-        # TODO: Hardcoded here for bin, Need to check with Dr.Candan
-        threshold = self.config["rules"]["bin"]
+        threshold = {var_config["name"]: float(var_config["bin"]) for model_config in self.config["model_settings"].values() for var_id, var_config in model_config["sampled_variables"].items()}
         match_counter = 0
         total_counter = len(job1["variables"])
         for key in job1["variables"]:
@@ -513,13 +515,13 @@ class Timelines:
         try:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-            stateful_models = [model_name for model_name, model_config in self.config["model"].items() if model_config["stateful"]]
-            stateless_models = [model_name for model_name, model_config in self.config["model"].items() if not model_config["stateful"]]
+            stateful_models = [model_config["name"] for model_id, model_config in self.config["model_settings"].items() if model_config["stateful"]]
+            stateless_models = [model_config["name"] for model_id, model_config in self.config["model_settings"].items() if not model_config["stateful"]]
 
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
-                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -538,7 +540,7 @@ class Timelines:
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
-                if self.config["model"][model_type]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:
@@ -604,7 +606,6 @@ class Timelines:
                         top_k_score = top_k_timelines[-1][0]
 
             top_k_timelines = sorted(top_k_timelines, key=lambda k: k[0], reverse=True)
-
 
         except Exception as e:
             raise e

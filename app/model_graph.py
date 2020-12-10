@@ -1,4 +1,5 @@
 from bson.objectid import ObjectId
+from app import utils
 
 
 class ModelGraph:
@@ -8,13 +9,19 @@ class ModelGraph:
         self.EDGE_COUNT = 0
         self.MONGO_CLIENT = mongo_client
         self.GRAPH_CLIENT = graph_client
-        # TODO: Hardcoded the model_dependency here and workflow_id here
-        self.model_dependency_list = ['flood', 'hurricane', 'human_mobility']
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+        self.model_list = [model_config["name"] for model_config in self.config["model_settings"].values()]
         self.workflow_id = workflow_id
+        self.model_type_to_id = utils.convert_id_to_model_type(self.config)
 
     def create_node(self, dsir):
-        """Function to convert the DSIR to a  node for the flow_graph_path"""
+        """
+        Function to convert the DSIR to a  node for the flow_graph_path
+        :parameter
+            dsir(dict): The dsir which forms a node
+        :returns
+            node(dict):
+        """
         node = dict()
         node['name'] = dsir['metadata']['model_type'] + "_" + str(dsir["_id"])
         node['periods'] = [dict({'id': str(dsir['_id']), 'end': int(dsir['metadata']['temporal']['end']) * 1000, 'connector': list()})]
@@ -78,13 +85,13 @@ class ModelGraph:
 
     def generate_edge(self, dsir, node, store):
         """
-        We only insert the forward edge for a node. Edge insertion takes place as follows.
+        We only insert the forward edge for a node. Edge insertion takes place as follows:
 
-        If the current DSIR is created by the ‘JobGateway’, we look at its nearest descendant which is created by
+        1)If the current DSIR is created by the ‘JobGateway’, we look at its nearest descendant which is created by
         ‘PostSynchronizationManager’ of the present window or ‘JobGateway’ of the next window, and join them using an
         edge.
 
-        If the current DSIR is created by the ‘PostSynchronizationManager’, we look at its nearest descendant which is
+        2)If the current DSIR is created by the ‘PostSynchronizationManager’, we look at its nearest descendant which is
         created by the ‘JobGateway’ of the next window and join them using an edge.
 
         """
@@ -113,7 +120,7 @@ class ModelGraph:
                             # Storing the dsir_child, its always a "model" node
                             self.update_node(child_id, "model", dsir_child["metadata"]["model_type"], "", edge_name)
 
-                            if self.config["model"][dsir["metadata"]["model_type"]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                            if self.config["model_settings"][self.model_type_to_id[dsir["metadata"]["model_type"]]]["psm_settings"]["psm_strategy"] == "average":
                                 # storing the dsir, its always a "intermediate" node
                                 self.update_node(dsir["_id"], "intermediate", dsir["metadata"]["model_type"], edge_name, "")
 
@@ -139,8 +146,8 @@ class ModelGraph:
                                 # storing the dsir, its always a "model" node
                                 self.update_node(dsir["_id"], "model", dsir["metadata"]["model_type"], edge_name, "")
                                 # storing the dsir_descendant
-                                if self.config["model"][dsir_descendant["metadata"]["model_type"]] \
-                                        ["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                                if self.config["model_settings"][self.model_type_to_id[dsir_descendant["metadata"]["model_type"]]] \
+                                        ["psm_settings"]["psm_strategy"] == "average":
                                     # The dsir_descendant is a "intermediate" node
                                     self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                                 else:
@@ -168,8 +175,8 @@ class ModelGraph:
                             self.store_edge(dsir["_id"], dsir_descendant_id, edge_name)
                             # storing the dsir, its always a "model" node
                             self.update_node(dsir["_id"], "model", dsir['metadata']['model_type'], edge_name, '')
-                            if self.config["model"][dsir_descendant["metadata"]["model_type"]] \
-                                    ["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                            if self.config["model_settings"][self.model_type_to_id[dsir_descendant["metadata"]["model_type"]]] \
+                                    ["psm_settings"]["psm_strategy"] == "average":
                                 # The dsir_descendant is a "intermediate" node
                                 self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                             else:
@@ -181,30 +188,31 @@ class ModelGraph:
             raise e
 
     def generate_model_graph(self):
-        """Function to generate the flow graph. Its done by parsing the DSIRS. A DSIR created by the PSM becomes a node
+        """
+        Function to generate the flow graph. Its done by parsing the DSIRS. A DSIR created by the PSM becomes a node
         by default, but the DSIR created by JobGateway undergoes the following sanity checks.
-        We check whether children DSIRs are created by PSM or not, if not, then the DSIR becomes a node"""
+        We check whether children DSIRs are created by PSM or not, if not, then the DSIR becomes a node
+        """
 
         try:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
             store = False
             mg_workflow_collection = self.GRAPH_CLIENT["model_graph"]["workflows"]
-            workflow = mg_workflow_collection.find_one({"workflow_id": self.workflow_id})
+            workflow = mg_workflow_collection.find_one({"_id": self.workflow_id})
 
             dsir_list = list(dsir_collection.find({
                 "created_by": {"$in": ["JobGateway", "PostSynchronizationManager"]},
                 "workflow_id": self.workflow_id
             }))
             dsir_list_length = len(dsir_list)
-
-            # We need to generate a new graph if there are new dsirs from MongoDB
+            # 5ee9b53749b0edbab2c58089
+            # We need to generate a new graph if there are any new DSIRs from MongoDB
             if workflow is None or workflow["total_dsirs"] < dsir_list_length:
                 store = True
                 mg_workflow_collection.update({"workflow_id": self.workflow_id}, {"$set": {"total_dsirs": dsir_list_length}}, upsert=True)
 
             graph = list()
             for dsir in dsir_list:
-                # TODO: check if more than a single DSIR exists for a single model on a particular window
                 # creating the graph node
                 node = self.create_node(dsir)
                 # generating the forward edges
@@ -241,11 +249,12 @@ class ModelGraph:
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
             mg_workflow_collection = self.GRAPH_CLIENT["model_graph"]["workflows"]
-            dsir_list = list(dsir_collection.find({"metadata.temporal.begin": self.config["simulation_context"]["temporal"]["begin"],
-                                              "created_by": "JobGateway", "workflow_id": self.workflow_id}))
+            dsir_list = list(dsir_collection.find({"metadata.temporal.begin": float(self.config["simulation_context"]["temporal"]["begin"]),
+                                                   "created_by": "JobGateway", "workflow_id": self.workflow_id}))
             start_nodes = [dsir["_id"] for dsir in dsir_list]
-            model_window_start = [self.config["simulation_context"]["temporal"]["begin"]] * len(self.model_dependency_list)
-            model_window_width = [model_config["output_window"] for model_config in self.config["model"].values()]
+            model_window_start = [float(self.config["simulation_context"]["temporal"]["begin"])] * len(self.model_list)
+            model_window_width = [float(model_config["temporal"]["output_window"]) for model_config in self.config["model_settings"].values()]
+            model_window_shift = [float(model_config["temporal"]["shift_size"]) for model_config in self.config["model_settings"].values()]
             window = 1
 
             window_count = {model: 1 for model in set([dsir["metadata"]["model_type"] for dsir in dsir_list])}
@@ -257,7 +266,7 @@ class ModelGraph:
                     node_collection.update({"node_id": node_id, "workflow_id": self.workflow_id}, {'$set': {'window_num': window}})
 
                     # pre-processing the node
-                    if self.config["model"][node["model_type"]]["post_synchronization_settings"]["aggregation_strategy"] == "average":
+                    if self.config["model_settings"][self.model_type_to_id[node["model_type"]]]["psm_settings"]["psm_strategy"] == "average":
                         # The forward-links which are connected to this node belongs to the same window_num
                         edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         for edge in edge_list:
@@ -266,9 +275,9 @@ class ModelGraph:
                                                    {"$set": {"window_num": window}})
 
                 # Performing temporal comparison to find the nodes for the next window
-                for i in range(len(self.model_dependency_list)):
+                for i in range(len(self.model_list)):
                     begin = model_window_start[i] + model_window_width[i]
-                    dsir_list = list(dsir_collection.find({"metadata.temporal.begin": begin, "metadata.model_type": self.model_dependency_list[i],
+                    dsir_list = list(dsir_collection.find({"metadata.temporal.begin": begin, "metadata.model_type": self.model_list[i],
                                                            "created_by": "JobGateway", "workflow_id": self.workflow_id}))
                     dsir_id_list = [dsir["_id"] for dsir in dsir_list]
                     if len(dsir_id_list) > 0:
@@ -276,7 +285,7 @@ class ModelGraph:
                         # Moving the temporal begin to next window begin
                         model_window_start[i] += model_window_width[i]
                         # Increasing the window count for the model
-                        window_count[self.model_dependency_list[i]] += 1
+                        window_count[self.model_list[i]] += 1
 
                 start_nodes = node_list
                 window += 1
