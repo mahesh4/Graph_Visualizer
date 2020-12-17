@@ -19,7 +19,9 @@ class Timelines:
         # self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
         self.model_dependency_list = {}
         for model_config in self.config["model_settings"].values():
-            self.model_dependency_list[model_config["name"]] = [self.model_list.index(upstream_model) for upstream_model in model_config["upstream_models"].values()]
+            self.model_dependency_list[model_config["name"]] = []
+            if "upstream_models" in model_config:
+                self.model_dependency_list[model_config["name"]] = [self.model_list.index(upstream_model) for upstream_model in model_config["upstream_models"].values()]
         self.workflow_id = workflow_id
 
     def remove_nodes_overlap(self, timelines_index_list):
@@ -473,7 +475,8 @@ class Timelines:
             return self.find_most_compatible_path(most_compatible_node, model_type, path)
 
     def compute_compatibility(self, job1, job2):
-        threshold = {var_config["name"]: float(var_config["bin"]) for model_config in self.config["model_settings"].values() for var_id, var_config in model_config["sampled_variables"].items()}
+        threshold = {var_config["name"]: float(var_config["bin_size"]) for model_config in self.config["model_settings"].values()
+                     for var_id, var_config in model_config["sampled_variables"].items()}
         match_counter = 0
         total_counter = len(job1["variables"])
         for key in job1["variables"]:

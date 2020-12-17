@@ -4,6 +4,7 @@ import os
 from sshtunnel import SSHTunnelForwarder
 
 MONGO_KEYFILE = "dummy"
+GRAPH_KEYFILE = "dummy"
 MONGO_IP = None
 GRAPH_IP = None
 
@@ -32,7 +33,7 @@ class DBConnect:
         self.GRAPH_SERVER = SSHTunnelForwarder(
             (GRAPH_IP, 22),
             ssh_username="cc",
-            ssh_pkey="~/.ssh/{0}".format(MONGO_KEYFILE),
+            ssh_pkey="~/.ssh/{0}".format(GRAPH_KEYFILE),
             remote_bind_address=('localhost', 27017)
         )
 
