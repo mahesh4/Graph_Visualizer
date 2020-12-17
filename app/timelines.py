@@ -16,7 +16,6 @@ class Timelines:
         self.timelines = []
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": ObjectId(workflow_id)})
         self.model_list = [model_config["name"] for model_config in self.config["model_settings"].values()]
-        self.model_type_to_id = utils.convert_id_to_model_type(self.config)
         # self.model_dependency_list = {"hurricane": [], "flood": [0], "human_mobility": [0, 1]}
         self.model_dependency_list = {}
         for model_config in self.config["model_settings"].values():
@@ -97,7 +96,8 @@ class Timelines:
 
                 # Adding all the intermediate nodes to the stateful nodes path
                 for i in range(len(self.model_list)):
-                    if self.config["model_settings"][self.model_type_to_id[self.model_list[i]]]["psm_settings"]["psm_strategy"] == "cluster":
+                    model_info = utils.access_model_by_name(self.config, self.model_list[i])
+                    if model_info["psm_settings"]["psm_strategy"] == "cluster":
                         model_path = self.model_paths[self.model_list[i]][index_list[i]]
                         new_model_path = []
                         for node_id in model_path:
@@ -150,7 +150,8 @@ class Timelines:
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
-                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+                model_info = utils.access_model_by_name(self.config, model_type)
+                if model_info["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -169,7 +170,8 @@ class Timelines:
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
-                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+                model_info = utils.access_model_by_name(self.config, model_type)
+                if model_info["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:
@@ -378,7 +380,7 @@ class Timelines:
         try:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
-
+            model_info = utils.access_model_by_name(self.config, model_type)
             # Adding node_id to the path and visited
             path.append(node["node_id"])
 
@@ -406,7 +408,7 @@ class Timelines:
 
                 if node["node_type"] == "model" and len(forward_edges) == 0:
                     # Finding a node in the next window based on parametric compatibility
-                    if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+                    if model_info["psm_settings"]["psm_strategy"] == "average":
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                                     "node_type": "intermediate", "workflow_id": self.workflow_id})
                     else:
@@ -435,7 +437,7 @@ class Timelines:
         node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
         edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
         job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
-
+        model_info = utils.access_model_by_name(self.config, model_type)
         # Adding node_id to the path
         path.append(node["node_id"])
 
@@ -450,7 +452,7 @@ class Timelines:
                 path.extend(model_node_id_list)
 
             # Finding a arbitrary node in the next window
-            if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+            if model_info["psm_settings"]["psm_strategy"] == "average":
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                             "node_type": "intermediate", "workflow_id": self.workflow_id})
             else:
@@ -521,7 +523,8 @@ class Timelines:
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
-                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+                model_info = utils.access_model_by_name(self.config, model_type)
+                if model_info["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -540,7 +543,8 @@ class Timelines:
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
-                if self.config["model_settings"][self.model_type_to_id[model_type]]["psm_settings"]["psm_strategy"] == "average":
+                model_info = utils.access_model_by_name(self.config, model_type)
+                if model_info["psm_settings"]["psm_strategy"] == "average":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:

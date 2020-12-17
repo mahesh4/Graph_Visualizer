@@ -12,15 +12,14 @@ class ModelGraph:
         self.config = self.MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
         self.model_list = [model_config["name"] for model_config in self.config["model_settings"].values()]
         self.workflow_id = workflow_id
-        self.model_type_to_id = utils.convert_id_to_model_type(self.config)
 
     def create_node(self, dsir):
         """
         Function to convert the DSIR to a  node for the flow_graph_path
-        :parameter
-            dsir(dict): The dsir which forms a node
-        :returns
-            node(dict):
+                :parameter
+                    dsir(dict): The dsir which forms a node
+                :returns
+                    node(dict):
         """
         node = dict()
         node['name'] = dsir['metadata']['model_type'] + "_" + str(dsir["_id"])
@@ -97,6 +96,7 @@ class ModelGraph:
         """
         try:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
+            dsir_model_info = utils.access_model_by_name(self.config, dsir["metadata"]["model_type"])
             # Base Case
             if "children" not in dsir:
                 if store:
@@ -120,7 +120,7 @@ class ModelGraph:
                             # Storing the dsir_child, its always a "model" node
                             self.update_node(child_id, "model", dsir_child["metadata"]["model_type"], "", edge_name)
 
-                            if self.config["model_settings"][self.model_type_to_id[dsir["metadata"]["model_type"]]]["psm_settings"]["psm_strategy"] == "average":
+                            if dsir_model_info["psm_settings"]["psm_strategy"] == "average":
                                 # storing the dsir, its always a "intermediate" node
                                 self.update_node(dsir["_id"], "intermediate", dsir["metadata"]["model_type"], edge_name, "")
 
@@ -138,6 +138,7 @@ class ModelGraph:
                             if store:
                                 # fetching the DSIR descendant
                                 dsir_descendant = dsir_collection.find_one({'_id': dsir_descendant_id, "workflow_id": self.workflow_id})
+                                dsir_descendant_model_info = utils.access_model_by_name(self.config, dsir_descendant["metadata"]["model_type"])
                                 # generating a edge_name
                                 edge_name = 'e' + str(self.EDGE_COUNT)
                                 self.EDGE_COUNT = self.EDGE_COUNT + 1
@@ -146,8 +147,7 @@ class ModelGraph:
                                 # storing the dsir, its always a "model" node
                                 self.update_node(dsir["_id"], "model", dsir["metadata"]["model_type"], edge_name, "")
                                 # storing the dsir_descendant
-                                if self.config["model_settings"][self.model_type_to_id[dsir_descendant["metadata"]["model_type"]]] \
-                                        ["psm_settings"]["psm_strategy"] == "average":
+                                if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "average":
                                     # The dsir_descendant is a "intermediate" node
                                     self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                                 else:
@@ -168,6 +168,7 @@ class ModelGraph:
                         if store:
                             # fetching the DSIR descendant
                             dsir_descendant = dsir_collection.find_one({"_id": dsir_descendant_id, "workflow_id": self.workflow_id})
+                            dsir_descendant_model_info = utils.access_model_by_name(self.config, dsir_descendant["metadata"]["model_type"])
                             # generating a edge_name
                             edge_name = "e" + str(self.EDGE_COUNT)
                             self.EDGE_COUNT = self.EDGE_COUNT + 1
@@ -175,8 +176,7 @@ class ModelGraph:
                             self.store_edge(dsir["_id"], dsir_descendant_id, edge_name)
                             # storing the dsir, its always a "model" node
                             self.update_node(dsir["_id"], "model", dsir['metadata']['model_type'], edge_name, '')
-                            if self.config["model_settings"][self.model_type_to_id[dsir_descendant["metadata"]["model_type"]]] \
-                                    ["psm_settings"]["psm_strategy"] == "average":
+                            if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "average":
                                 # The dsir_descendant is a "intermediate" node
                                 self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                             else:
@@ -264,9 +264,9 @@ class ModelGraph:
                     node = node_collection.find_one({"node_id": node_id, "workflow_id": self.workflow_id})
                     # updating the window_num for the node
                     node_collection.update({"node_id": node_id, "workflow_id": self.workflow_id}, {'$set': {'window_num': window}})
-
+                    model_info = utils.access_model_by_name(self.config, node["model_type"])
                     # pre-processing the node
-                    if self.config["model_settings"][self.model_type_to_id[node["model_type"]]]["psm_settings"]["psm_strategy"] == "average":
+                    if model_info["psm_settings"]["psm_strategy"] == "average":
                         # The forward-links which are connected to this node belongs to the same window_num
                         edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         for edge in edge_list:
