@@ -153,7 +153,7 @@ class Timelines:
             for model_type in stateful_models:
                 visited = set()
                 model_info = utils.access_model_by_name(self.config, model_type)
-                if model_info["psm_settings"]["psm_strategy"] == "average":
+                if model_info["psm_settings"]["psm_strategy"] == "cluster":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -173,7 +173,7 @@ class Timelines:
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
                 model_info = utils.access_model_by_name(self.config, model_type)
-                if model_info["psm_settings"]["psm_strategy"] == "average":
+                if model_info["psm_settings"]["psm_strategy"] == "cluster":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:
@@ -410,7 +410,7 @@ class Timelines:
 
                 if node["node_type"] == "model" and len(forward_edges) == 0:
                     # Finding a node in the next window based on parametric compatibility
-                    if model_info["psm_settings"]["psm_strategy"] == "average":
+                    if model_info["psm_settings"]["psm_strategy"] == "cluster":
                         candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                                     "node_type": "intermediate", "workflow_id": self.workflow_id})
                     else:
@@ -440,6 +440,7 @@ class Timelines:
         edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
         job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
         model_info = utils.access_model_by_name(self.config, model_type)
+        print(model_type)
         # Adding node_id to the path
         path.append(node["node_id"])
 
@@ -454,7 +455,7 @@ class Timelines:
                 path.extend(model_node_id_list)
 
             # Finding a arbitrary node in the next window
-            if model_info["psm_settings"]["psm_strategy"] == "average":
+            if model_info["psm_settings"]["psm_strategy"] == "cluster":
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                             "node_type": "intermediate", "workflow_id": self.workflow_id})
             else:
@@ -527,7 +528,7 @@ class Timelines:
             for model_type in stateful_models:
                 visited = set()
                 model_info = utils.access_model_by_name(self.config, model_type)
-                if model_info["psm_settings"]["psm_strategy"] == "average":
+                if model_info["psm_settings"]["psm_strategy"] == "cluster":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                     for node in node_list:
@@ -547,7 +548,7 @@ class Timelines:
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
                 model_info = utils.access_model_by_name(self.config, model_type)
-                if model_info["psm_settings"]["psm_strategy"] == "average":
+                if model_info["psm_settings"]["psm_strategy"] == "cluster":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
                 else:

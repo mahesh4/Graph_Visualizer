@@ -97,6 +97,7 @@ class ModelGraph:
         try:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
             dsir_model_info = utils.access_model_by_name(self.config, dsir["metadata"]["model_type"])
+            print(dsir)
             # Base Case
             if "children" not in dsir:
                 if store:
@@ -106,7 +107,6 @@ class ModelGraph:
             if dsir["created_by"] == "JobGateway":
                 for child_id in dsir["children"]:
                     dsir_child = dsir_collection.find_one({"_id": child_id, "workflow_id": self.workflow_id})
-
                     if dsir_child["created_by"] == "PostSynchronizationManager":
                         # The dsir_child is part of the graph. Now, we generate edge between them
                         node["periods"][0]["connector"].append({"connectTo": str(child_id), "connectorType": "finish-start"})
@@ -120,7 +120,7 @@ class ModelGraph:
                             # Storing the dsir_child, its always a "model" node
                             self.update_node(child_id, "model", dsir_child["metadata"]["model_type"], "", edge_name)
 
-                            if dsir_model_info["psm_settings"]["psm_strategy"] == "average":
+                            if dsir_model_info["psm_settings"]["psm_strategy"] == "cluster":
                                 # storing the dsir, its always a "intermediate" node
                                 self.update_node(dsir["_id"], "intermediate", dsir["metadata"]["model_type"], edge_name, "")
 
@@ -147,7 +147,7 @@ class ModelGraph:
                                 # storing the dsir, its always a "model" node
                                 self.update_node(dsir["_id"], "model", dsir["metadata"]["model_type"], edge_name, "")
                                 # storing the dsir_descendant
-                                if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "average":
+                                if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "cluster":
                                     # The dsir_descendant is a "intermediate" node
                                     self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                                 else:
@@ -176,7 +176,7 @@ class ModelGraph:
                             self.store_edge(dsir["_id"], dsir_descendant_id, edge_name)
                             # storing the dsir, its always a "model" node
                             self.update_node(dsir["_id"], "model", dsir['metadata']['model_type'], edge_name, '')
-                            if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "average":
+                            if dsir_descendant_model_info["psm_settings"]["psm_strategy"] == "cluster":
                                 # The dsir_descendant is a "intermediate" node
                                 self.update_node(dsir_descendant['_id'], "intermediate", dsir_descendant['metadata']['model_type'], "", edge_name)
                             else:
@@ -198,20 +198,20 @@ class ModelGraph:
             dsir_collection = self.MONGO_CLIENT["ds_results"]["dsir"]
             store = False
             mg_workflow_collection = self.GRAPH_CLIENT["model_graph"]["workflows"]
-            workflow = mg_workflow_collection.find_one({"_id": self.workflow_id})
+            workflow = mg_workflow_collection.find_one({"workflow_id": self.workflow_id})
 
             dsir_list = list(dsir_collection.find({
                 "created_by": {"$in": ["JobGateway", "PostSynchronizationManager"]},
                 "workflow_id": self.workflow_id
             }))
             dsir_list_length = len(dsir_list)
-            # 5ee9b53749b0edbab2c58089
             # We need to generate a new graph if there are any new DSIRs from MongoDB
             if workflow is None or workflow["total_dsirs"] < dsir_list_length:
                 store = True
                 mg_workflow_collection.update({"workflow_id": self.workflow_id}, {"$set": {"total_dsirs": dsir_list_length}}, upsert=True)
 
             graph = list()
+            print(store)
             for dsir in dsir_list:
                 # creating the graph node
                 node = self.create_node(dsir)
@@ -266,7 +266,7 @@ class ModelGraph:
                     node_collection.update({"node_id": node_id, "workflow_id": self.workflow_id}, {'$set': {'window_num': window}})
                     model_info = utils.access_model_by_name(self.config, node["model_type"])
                     # pre-processing the node
-                    if model_info["psm_settings"]["psm_strategy"] == "average":
+                    if model_info["psm_settings"]["psm_strategy"] == "cluster":
                         # The forward-links which are connected to this node belongs to the same window_num
                         edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
                         for edge in edge_list:
