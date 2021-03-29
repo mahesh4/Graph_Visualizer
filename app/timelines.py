@@ -21,7 +21,8 @@ class Timelines:
         for model_config in self.config["model_settings"].values():
             self.model_dependency_list[model_config["name"]] = []
             if "upstream_models" in model_config:
-                self.model_dependency_list[model_config["name"]] = [self.model_list.index(upstream_model) for upstream_model in model_config["upstream_models"].values()]
+                self.model_dependency_list[model_config["name"]] = [self.model_list.index(upstream_model) for upstream_model in
+                                                                    model_config["upstream_models"].values()]
         self.workflow_id = workflow_id
 
     def remove_nodes_overlap(self, timelines_index_list):
@@ -148,7 +149,8 @@ class Timelines:
             node_collection = self.GRAPH_CLIENT['model_graph']['node']
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             stateful_models = [model_config["name"] for model_name, model_config in self.config["model_settings"].items() if model_config["stateful"]]
-            stateless_models = [model_config["name"] for model_name, model_config in self.config["model_settings"].items() if not model_config["stateful"]]
+            stateless_models = [model_config["name"] for model_name, model_config in self.config["model_settings"].items() if
+                                not model_config["stateful"]]
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
                 visited = set()
@@ -167,21 +169,29 @@ class Timelines:
                 else:
                     node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
-                for node in node_list:
-                    self.dfs(node, model_type, [])
+                    for node in node_list:
+                        self.dfs(node, model_type, [])
 
             # Finding the most compatible paths on each "stateless" model_type
             for model_type in stateless_models:
                 model_info = utils.access_model_by_name(self.config, model_type)
+                visited = set()
                 if model_info["psm_settings"]["psm_strategy"] == "cluster":
                     node_list = node_collection.find({"window_num": 1, "node_type": "intermediate", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
+                    for node in node_list:
+                        forward_edges = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
+                        destination_list = [edge["destination"] for edge in forward_edges]
+                        for destination_id in destination_list:
+                            destination = node_collection.find_one({"node_id": destination_id, "workflow_id": self.workflow_id})
+                            if destination["model_type"] == model_type and destination_id not in visited:
+                                visited.add(destination_id)
+                                self.find_most_compatible_path(node, model_type, [])
                 else:
                     node_list = node_collection.find({"window_num": 1, "node_type": "model", "model_type": model_type,
                                                       "workflow_id": self.workflow_id})
-
-                for node in node_list:
-                    self.find_most_compatible_path(node, model_type, [])
+                    for node in node_list:
+                        self.find_most_compatible_path(node, model_type, [])
 
             # Getting the top K timelines index list
             timelines_index_list = self.run_nra(k)
@@ -436,29 +446,40 @@ class Timelines:
             raise e
 
     def find_most_compatible_path(self, node, model_type, path):
+        """
+        Function to traverse the data-provenance graph and find a model-path
+        :param node(dict):
+        :param model_type(str):
+        :param path(list):
+        :return(void):
+        """
         node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
         edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
         job_collection = self.MONGO_CLIENT["ds_results"]["jobs"]
         model_info = utils.access_model_by_name(self.config, model_type)
-        print(model_type)
         # Adding node_id to the path
         path.append(node["node_id"])
 
+        if node["node_type"] == "intermediate":
+            # We have to add the "model" node in the same window, and the remaining intermediate nodes of the corresponding "model" node
+            model_node_id = edge_collection.find_one({"source": node["node_id"], "workflow_id": self.workflow_id})["destination"]
+
+            intermediate_node_id_list = [edge["source"] for edge in edge_collection.find({"destination": model_node_id})
+                                         if edge["source"] != node["node_id"]]
+            path.extend(intermediate_node_id_list)
+            path.append(model_node_id)
+
         # Adding the path to the self.model_path
-        if node["window_num"] == self.window_count[model_type] and node["node_type"] == "model":
+        if node["window_num"] == self.window_count[model_type]:
             self.model_paths[model_type].append(path)
         else:
-            if node["node_type"] == "intermediate":
-                # We have to add the model_node in the same window
-                edge_list = edge_collection.find({"source": node["node_id"], "workflow_id": self.workflow_id})
-                model_node_id_list = [edge["destination"] for edge in edge_list]
-                path.extend(model_node_id_list)
-
             # Finding a arbitrary node in the next window
             if model_info["psm_settings"]["psm_strategy"] == "cluster":
+                # Finding a "intermediate" node
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type,
                                                             "node_type": "intermediate", "workflow_id": self.workflow_id})
             else:
+                # Finding a "model" node
                 candidate_node_list = node_collection.find({"window_num": node["window_num"] + 1, "model_type": model_type, "node_type": "model",
                                                             "workflow_id": self.workflow_id})
 
@@ -522,7 +543,8 @@ class Timelines:
             node_collection = self.GRAPH_CLIENT["model_graph"]["node"]
             edge_collection = self.GRAPH_CLIENT["model_graph"]["edge"]
             stateful_models = [model_config["name"] for model_id, model_config in self.config["model_settings"].items() if model_config["stateful"]]
-            stateless_models = [model_config["name"] for model_id, model_config in self.config["model_settings"].items() if not model_config["stateful"]]
+            stateless_models = [model_config["name"] for model_id, model_config in self.config["model_settings"].items() if
+                                not model_config["stateful"]]
 
             # Perform DFS on each "stateful" model_type
             for model_type in stateful_models:
