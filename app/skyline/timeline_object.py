@@ -4,27 +4,28 @@ from app.skyline.instance_object import InstanceObject
 
 
 class TimelineObject:
-    def __init__(self, value_list):
+    def __init__(self, value_list, dim):
         self.instances = [InstanceObject(value) for value in value_list]
         self.instances_count = len(self.instances)
         self.prob_lower_limit = 0
         self.prob_upper_limit = 1
-        self.dim = len(value_list[0])
         self.layers = list()
-        self.UPmax = None
+        self.UPmax = 1  # initial value
         self.UPmin = 1  # Visited(Processed) Subset Pmin
-        self.virtual_instance_min = None
+        self.virtual_instance_min_idx = None
         self.virtual_instance_max = None
+        self.compute_virtual_instances(dim)
+        self.processed_instance_count = 0
 
-    def check_dominating(self, dominating_instance, dominated_instance):
+    def check_dominating(self, dominating_instance, dominated_instance, dim):
         """
-
         :param dominating_instance:
         :param dominated_instance:
+        :param dim:
         :return:
         """
         less_count, equal_count, greater_count = 0, 0, 0
-        for i in range(self.dim):
+        for i in range(dim):
             if dominating_instance.value[i] < dominated_instance.value[i]:
                 less_count += 1
             elif dominating_instance.value[i] > dominated_instance.values[i]:
@@ -39,9 +40,9 @@ class TimelineObject:
         else:
             return 0
 
-    def find_layer(self, instance):
+    def find_layer(self, instance, dim):
         """
-
+        Function to compute the layer in which the instance should belong
         :param instance:
         :return:
         """
@@ -51,7 +52,7 @@ class TimelineObject:
             mid = int(beg + (end - beg) / 2)
             update = False
             for layer_instance in self.layers[mid]:
-                dominate = self.check_dominating(instance, layer_instance)
+                dominate = self.check_dominating(instance, layer_instance, dim)
                 if dominate == 1:
                     end = mid - 1
                     update = True
@@ -63,23 +64,33 @@ class TimelineObject:
             # End of loop
             if not update:
                 return mid
+        # End of loop
+        # TODO: Need to evaluate here
+        return beg
 
-        return 0 if beg == 0 else beg + 1
+    def partition_instances_to_layers(self, dim):
+        """
 
-    def partition_instances_to_layers(self):
-        self.instances.sort(key=lambda x: np.sum(x.value))
+        :param dim:
+        :return:
+        """
+        # Note: We don't add the virtual instances into the layers
+        self.instances.sort(key=lambda x: sum(x.value))
         for idx, instance in enumerate(self.instances):
-            layer_index = self.find_layer(instance)
-            if layer_index < len(self.layers):
+            if idx == self.virtual_instance_min_idx:
+                continue
+            layer_index = self.find_layer(instance, dim)
+            total_layers = len(self.layers)
+            if layer_index < total_layers:
                 self.layers[layer_index].append(idx)
-            elif layer_index == len(self.layers):
+            elif layer_index == total_layers:
                 self.layers.append([idx])
             else:
                 raise Exception("wrong layer found")
         # End of loop
 
-    def is_last_instance_in_layer(self, instance_idx):
-        layer_idx = self.find_layer(self.instances[instance_idx])
+    def is_last_instance_in_layer(self, instance_idx, dim):
+        layer_idx = self.find_layer(self.instances[instance_idx], dim)
         return True, layer_idx if self.layers[layer_idx][-1] == instance_idx else False, layer_idx
 
     def update_Pmax(self, layer_idx):
@@ -99,4 +110,25 @@ class TimelineObject:
         return None
 
     def update_UPmin(self, probability):
-        pass
+        self.UPmin = min(self.UPmin, probability)
+
+    def compute_virtual_instances(self, dim):
+        """
+        Function to compute the virtual_min and virtual_max instance
+        :return:
+        """
+        virtual_min = [sys.maxsize] * dim
+        virtual_max = [-1-sys.maxsize] * dim
+        for instance in self.instances:
+            for idx, val in enumerate(instance.value):
+                virtual_min[idx] = min(virtual_min[idx], val)
+                virtual_max[idx] = max(virtual_max[idx], val)
+            # End of loop
+        # End of loop
+        self.instances.append(InstanceObject(virtual_min))
+        self.virtual_instance_min_idx = self.instances_count
+        self.instances_count += 1
+        self.virtual_instance_max = virtual_max
+
+
+
