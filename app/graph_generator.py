@@ -5,31 +5,54 @@ import pymongo
 from bson.objectid import ObjectId
 from collections import defaultdict, OrderedDict
 from itertools import chain, combinations
+from sklearn.cluster import SpectralClustering
 import itertools
 import math
 import copy
 import numpy
 from scipy import stats as scipy_stats
-from app import utils
+from app import ds_utils
 from app.db_connect import DBConnect
+from app import ProvenanceCriteria
+from app import wm_utils
+from app import Skyline
 
-DS_CONFIG = None
+DS_CONFIG: dict = dict()
 MONGO_CLIENT = None
 KEPLER_DB: pymongo.collection.Collection = None
-DSIR_DB: dict = dict()
+DSIR_DB: pymongo.collection.Collection = None
 JOBS_DB: pymongo.collection.Collection = None
+HISTORY_DB: pymongo.collection.Collection = None
+DB_PROVENANCE: pymongo.collection.Collection = None
 
 
 def _connect_to_mongo():
-    global DS_CONFIG, DSIR_DB, MONGO_CLIENT, KEPLER_DB, JOBS_DB
+    global DS_CONFIG, DSIR_DB, MONGO_CLIENT, KEPLER_DB, JOBS_DB, HISTORY_DB, DB_PROVENANCE
 
-    db_connect = DBConnect()
-    db_connect.connect_db()
-    MONGO_CLIENT = db_connect.get_connection()
     DS_CONFIG = MONGO_CLIENT["ds_config"]["collection"].find_one({})
     KEPLER_DB = MONGO_CLIENT["ds_state"]["kepler"]
     DSIR_DB = MONGO_CLIENT["ds_results"]["dsir"]
     JOBS_DB = MONGO_CLIENT["ds_results"]["jobs"]
+    HISTORY_DB = MONGO_CLIENT["ds_provenance"]["history"]
+    DB_PROVENANCE = MONGO_CLIENT["ds_provenance"]["provenance"]
+
+
+def increase_temporal_context(model, model_info):
+    global EXIT_CODE_OVERRIDE, KEPLER_DB
+
+    current_model_state = KEPLER_DB.find_one({"model_type": model})
+    current_end = float(current_model_state["temporal_context"]['end'])
+    shift_size = float(model_info["temporal"]["shift_size"])
+    # Update begin time
+    updated_begin = current_end - shift_size
+    KEPLER_DB.update_one({"model_type": model_info}, {"$set": {"temporal_context.begin": updated_begin}})
+
+    # Update end time
+    updated_end = updated_begin + float(model_info["temporal"]['output_window'])
+    KEPLER_DB.update_one({"model_type": model}, {"$set": {"temporal_context.end": updated_end}})
+    # if this model has produced results which reach to the end of the simulation window, then it should stop now
+    if updated_end >= float(DS_CONFIG["simulation_context"]["temporal"]["end"]):
+        EXIT_CODE_OVERRIDE = ds_utils.ExitCode.SimulationComplete
 
 
 def _perform_output(model, model_info):
@@ -52,21 +75,104 @@ def _perform_output(model, model_info):
                                  {"$addToSet": {"result_pool.to_window": dsir_id}})
         # End of loop
     # End of loop
-    increase_temporal_context()
+    increase_temporal_context(model, model_info)
     return
 
 
-def _perform_postsynchronization(model, model_info):
+def _create_provenance(target_dsir, model):
+    """
+    Function to create provenance of the target_dsir, and store it in mongoDB
+        Parameters:
+            target_dsir (dict): Aggregate DSIR
+        Returns:
+            None
+    """
+    global DS_CONFIG, DS_RESULTS, DB_PROVENANCE, JOBS_DB
+
+    workflow_id = DS_CONFIG['workflow_id']
+    state = KEPLER_DB.find_one({"model_type": model})
+    job_list = list()
+
+    if target_dsir["created_by"] == "JobGateway":
+        job_list.append(JOBS_DB.find_one({"output_dsir": target_dsir["_id"]}))
+    else:
+        for output_dsir in target_dsir["parents"]:
+            job_list.append(JOBS_DB.find_one({"output_dsir": output_dsir}))
+
+    # Create Provenance to the target_dsir
+    history_id_set = set()
+    for job in job_list:
+        input_dsirs = job["input_dsir"]  # These are DSIRs created by AM_resampling
+        upstream_dsirs = [upstream_dsir_id for input_dsir_id in input_dsirs for upstream_dsir_id in DSIR_DB.find_one({"_id": input_dsir_id})["parents"]]
+        for history in state["history"]:
+            if set(upstream_dsirs) == set(history["upstream_dsir"]):
+                history_id_set.add(history["history_id"])
+        # End of loop
+    # End of loop
+
+    provenance = ProvenanceCriteria.create_provenance_from_histories(list(history_id_set))
+    ProvenanceCriteria.add_target_dsir_to_provenance(provenance, target_dsir)
+    DB_PROVENANCE.insert_one({"provenance": provenance, "workflow_id": workflow_id, "dsir_id": target_dsir["_id"]})
+    return
+
+
+def get_parameter_value_dict(dsir_id_list):
+    global JOBS_DB
+
+    parameter_value_dict = defaultdict(list)
+    for dsir_id in dsir_id_list:
+        target_job = JOBS_DB.find_one({"output_dsir": dsir_id})
+        for variable, value in target_job["variables"].items():
+            parameter_value_dict[variable].append(value)
+    return parameter_value_dict
+
+
+def _perform_clustering(affinity_matrix, no_of_clusters, topK=5):
+    # Determining the optimal no of clusters
+    affinity_matrix = numpy.asarray(affinity_matrix)
+    eigenvalues, eigenvectors = numpy.linalg.eig(affinity_matrix)
+
+    diff = numpy.round(numpy.absolute(numpy.diff(eigenvalues)), 4)
+    print(numpy.where(diff > 0)[0])
+    if len(numpy.where(diff > 0)[0]) == 0:
+        nb_clusters = affinity_matrix.shape[0]
+    else:
+        index_largest_gap = numpy.argsort(diff)[::-1][:topK]
+        index_largest_gap = index_largest_gap + 1
+        if no_of_clusters in index_largest_gap:
+            nb_clusters = no_of_clusters
+        else:
+            nb_clusters = max(index_largest_gap)
+
+    # if index_largest_gap + 1 >= no_of_candidates:
+    #     nb_clusters = index_largest_gap + 1
+    # else:
+    #     nb_clusters = no_of_candidates
+
+    print("Optimal number of clusters is: " + str(nb_clusters))
+
+    clustering = SpectralClustering(n_clusters=nb_clusters, assign_labels="discretize", random_state=0) \
+        .fit(affinity_matrix)
+
+    print("Cluster labels: " + str(clustering.labels_))
+
+    return nb_clusters, clustering.labels_
+
+
+def _perform_postsynchronization(model, begin, output_end, model_info):
     global DSIR_DB, KEPLER_DB
 
     aggregation_strategy = model_info["psm_settings"]["psm_strategy"]
     state = KEPLER_DB.find_one({"model_type": model})
     dsir_list = state["result_pool"]["to_sync"]
     to_output = list()
+    temporal_context = {"begin": begin, "end": output_end}
+    shift_size = model_info["temporal"]["shift_size"]
+    output_window = model_info["temporal"]["output_window"]
     if aggregation_strategy == 'none':
         for dsir_id in dsir_list:
             target_dsir = DSIR_DB.find_one({"_id": dsir_id})
-            create_provenance(target_dsir)
+            _create_provenance(target_dsir, model)
             to_output.append(dsir_id)
         # End of loop
     elif aggregation_strategy == "cluster":
@@ -79,7 +185,7 @@ def _perform_postsynchronization(model, model_info):
         # Creating the provenance for each DSIR
         for dsir_id in dsir_list:
             dsir = DSIR_DB.find_one({"_id": dsir_id})
-            create_provenance(dsir)
+            _create_provenance(dsir, model)
         # End of loop
 
         dsir_pair_list = [[dsir_list[i], dsir_list[j]] for i in range(no_of_dsirs) for j in range(no_of_dsirs) if i != j]
@@ -87,9 +193,9 @@ def _perform_postsynchronization(model, model_info):
         parametric_compatibility_function = None
         if parametric_similarity:
             if DS_CONFIG["compatibility_settings"]["parametric_mode"] == "conjunction":
-                parametric_compatibility_function = ds_compatibility.conjunction
+                parametric_compatibility_function = wm_utils.conjunction
             elif DS_CONFIG["compatibility_settings"]["parametric_mode"] == "union":
-                parametric_compatibility_function = ds_compatibility.union
+                parametric_compatibility_function = wm_utils.union
 
         for dsir_pair in dsir_pair_list:
             if dsir_pair[0] == dsir_pair[1]:
@@ -113,7 +219,7 @@ def _perform_postsynchronization(model, model_info):
             similarity_graph[j_index][i_index] = score
         # End of loop
 
-        nb_clusters, cluster_labels = perform_clustering(similarity_graph, no_of_candidates)
+        nb_clusters, cluster_labels = _perform_clustering(similarity_graph, no_of_candidates)
 
         # Creating the scores for the cluster
         scores = dict()
@@ -142,14 +248,14 @@ def _perform_postsynchronization(model, model_info):
                     dsir_aggr_list.append(dsir_list[index])
             # End of loop
 
-            new_dsir = _create_dsir(model, start, end, shift_size, output_window, "PostSynchronizationManager")
+            new_dsir = _create_dsir(model, begin, output_end, shift_size, output_window, "PostSynchronizationManager")
             new_dsir["parents"] = dsir_aggr_list
             DSIR_DB.save(new_dsir)
             to_output.append(new_dsir["_id"])
             # Adding the children to each dsir in dsir_aggr_list
             for dsir_id in dsir_aggr_list:
                 dsir = DSIR_DB.find_one({"_id": dsir_id})
-                dsir["children"] = new_dsir["_id"]
+                dsir["children"] = [new_dsir["_id"]]
                 DSIR_DB.save(dsir)
             # End of loop
 
@@ -158,23 +264,27 @@ def _perform_postsynchronization(model, model_info):
         raise ValueError(f"Unknown aggregation strategy: {aggregation_strategy}")
     # Updating the state
     state["result_pool"]["to_output"] = to_output
+    state["result_pool"]["to_sync"] = []
     KEPLER_DB.save(state)
     return
 
 
-def _sample_values(model, start, end, model_info):
+def _sample_values(model, begin, output_end, model_info):
     global KEPLER_DB, JOBS_DB, DS_CONFIG, DSIR_DB
 
     state = KEPLER_DB.find_one({"model_type": model})
+    shift_size = model_info["temporal"]["shift_size"]
+    output_window = model_info["temporal"]["output_window"]
     candidate_list = state["result_pool"]["to_sample"]
     sampling_strategy = DS_CONFIG["compatibility_settings"]["compatibility_strategy"]
     model_vars = list(model_info["sampled_variables"].values())
     to_sync = list()
     job_count = model_info["sm_settings"]["sm_fanout"]
     for dsir_list in candidate_list:
-        new_job = _create_job(model)
-        new_job["input_dsir"] = dsir_list
         for i in range(job_count):
+            new_job = _create_job(model)
+            new_job["input_dsir"] = dsir_list
+
             if sampling_strategy == "independent":
                 for each_var in model_vars:
                     var_name = each_var["name"]
@@ -183,9 +293,11 @@ def _sample_values(model, start, end, model_info):
                     new_job["variables"][var_name] = round(random.uniform(low, high), 2)
                 # End of loop
             # TODO: Need to develop provenance_sampling
-            # creating new_dsirs for job
-            new_dsir = _create_dsir(model, start, end, shift_size, output_window)
+            # creating new_dsirs for job <---Execution--->
+            new_dsir = _create_dsir(model, begin, output_end, shift_size, output_window, "JobGateway")
+            new_dsir["metadata"]["job_id"] = new_job["_id"]
             new_job["output_dsir"] = new_dsir["_id"]
+            new_job["relevance"] = round(random.uniform(0, 1), 2)
             new_dsir["parents"] = dsir_list
             DSIR_DB.save(new_dsir)
             # Adding the new dsir to to_sync
@@ -200,26 +312,36 @@ def _sample_values(model, start, end, model_info):
         # End of loop
     # End of loop
     state["result_pool"]["to_sync"] = to_sync
+    state["result_pool"]["to_sample"] = []
+    state["subactor_state"] = "PostSynchronizationManager"
     KEPLER_DB.save(state)
     return
 
 
-def _perform_alignment(model, start, end, model_info):
+def _perform_alignment(model, begin, output_end, model_info):
     global KEPLER_DB, DS_CONFIG, DSIR_DB
 
     state = KEPLER_DB.find_one({"model_type": model})
     output_window = model_info["temporal"]["output_window"]
+    shift_size = model_info["temporal"]["shift_size"]
     for candidate_set in state["result_pool"]["to_align"]:
         model_instances_dict = _group_instances_by_model(candidate_set)
         aligned_dsirs = list()
         for model, instance_list in model_instances_dict.items():
-            new_dsir = _create_dsir(model, start, end, shift_size, output_window)
+            new_dsir = _create_dsir(model, begin, output_end, shift_size, output_window, "AM_resampling")
             new_dsir["parents"] = instance_list
             aligned_dsirs.append(new_dsir["_id"])
             DSIR_DB.save(new_dsir)
+            # Updating the children relationship
+            for instance_id in instance_list:
+                instance_dsir = DSIR_DB.find_one({"_id": instance_id})
+                instance_dsir["children"].append(new_dsir["_id"])
+                DSIR_DB.save(instance_dsir)
         # End of loop
         state["result_pool"]["to_sample"].append(aligned_dsirs)
     # End of loop
+    state["subactor_state"] = "SamplingManager"
+    state["result_pool"]["to_align"] = []
     KEPLER_DB.save(state)
 
 
@@ -229,6 +351,7 @@ def _power_set(input_iterable: collections.Iterable):
 
 
 def _check_compatibility_temporal(candidate_sets, begin, model_info):
+    # TODO: Need to check
     # records are temporally-ordered
     # if there are enough to satisfy the current window, repackage the constituent DSIRs into a new DSAR
     new_candidates = []
@@ -241,6 +364,31 @@ def _check_compatibility_temporal(candidate_sets, begin, model_info):
             new_candidates.append([record_set, compat_dict])
     # End of loop
     print(f"\tOf these, {len(new_candidates)} candidate(s) were temporally compatible.")
+    return new_candidates
+
+
+def generate_provenance_score(candidate_sets, temporal_context):
+    """
+    Function to generate the provenance_score for each candidate_set
+        Parameters:
+            candidate_sets (list): A list of candidate windowing_set
+            temporal_context (dict): Current temporal context of the execution
+        Returns:
+            new_candidate (list): A list of candidate windowing_set with their corresponding provenance scores computed
+    """
+    global MONGO_CLIENT
+
+    new_candidates = []
+    for candidate_record_set in candidate_sets:
+        # check to see if this is a valid set of results
+        # TODO: Need to evaluate
+        record_set = candidate_record_set[0]
+        compat_dict = candidate_record_set[1]
+        dsir_set = record_set
+        provenance_score = ProvenanceCriteria.find_provenance_score(dsir_set, temporal_context)
+        compat_dict["provenance"] = provenance_score
+        new_candidates.append([record_set, compat_dict, candidate_record_set[2]])
+    # End of loop
     return new_candidates
 
 
@@ -406,8 +554,8 @@ def _create_dsir(model, start, end, shift_size, output_window, created_by):
     new_dsir = dict()
     new_dsir["_id"] = bson.objectid.ObjectId()
     new_dsir["workflow_id"] = DS_CONFIG['workflow_id']
-    new_dsir["metadata"] = {"temporal": {"begin": start, "end": end, "window_size": output_window, "shift_size": shift_size, "timestamp_list": list(),
-                                         "model_type": model}}
+    new_dsir["metadata"] = {"temporal": {"begin": start, "end": end, "window_size": output_window, "shift_size": shift_size, "timestamp_list": list()},
+                            "model_type": model}
     new_dsir["is_aggregated"] = False
     new_dsir["do_visualize"] = False
     # TODO: Need to change here
@@ -439,7 +587,7 @@ def _split_results(all_results, model, begin, model_info):
     for record_id in all_results:
         record = DSIR_DB.find_one({"_id": record_id})
         # removing data which are not compatible for current window
-        # TODO: Shift added here
+        # TODO: Need to evaluate here
         if record["metadata"]["model_type"] == model and record["metadata"]["temporal"]["end"] == begin + shift_size:
             self.append(record_id)
         elif begin <= record["metadata"]["temporal"]["end"] or record["metadata"]["temporal"]["end"] >= begin + input_window:
@@ -450,12 +598,36 @@ def _split_results(all_results, model, begin, model_info):
 
 
 def _generate_windowing_sets(model, begin, output_end, model_info):
-    global DS_CONFIG, KEPLER_DB
+    global DS_CONFIG, KEPLER_DB, DSIR_DB
 
     state = KEPLER_DB.find_one({"model_type": model})
     simulation_end = DS_CONFIG["simulation_context"]["temporal"]["end"]
     is_seed = DS_CONFIG["simulation_context"]["temporal"]["begin"] == begin and "upstream_models" not in model_info
-    # TODO:Need to write logic for is_seed
+    input_window = model_info["temporal"]["input_window"]
+    if is_seed:
+        # TODO:Need to write logic for is_seed
+        # creating seed dsir
+        seed_dsir = dict()
+        seed_dsir["_id"] = bson.objectid.ObjectId()
+        seed_dsir["workflow_id"] = DS_CONFIG["workflow_id"]
+        seed_dsir["IS_SEED"] = True
+        seed_dsir["parents"] = []
+        seed_dsir["children"] = []
+        seed_dsir["created_by"] = "WindowManager"
+        seed_dsir["metadata"] = {"temporal": {"begin": begin, "end": output_end}}
+        seed_dsir["metadata"]["model_type"] = "is_seed"
+        temporal_context = {"begin": begin, "end": min(begin + input_window, DS_CONFIG["simulation_context"]["temporal"]["end"])}
+        history = ProvenanceCriteria.create_history_from_windowing_set([seed_dsir], temporal_context)
+        # Writing history to DB
+        history_id = HISTORY_DB.insert_one({"history": history, "workflow_id": DS_CONFIG["workflow_id"]})
+        history_list = list()
+        history_list.append({"history_id": history_id.inserted_id, "upstream_dsir": [seed_dsir["_id"]]})
+        state["subactor_state"] = "AlignmentManager"
+        state["history"] = history_list
+        state["result_pool"]["to_align"].append([seed_dsir["_id"]])
+        KEPLER_DB.save(state)
+        DSIR_DB.save(seed_dsir)
+        return
 
     # splitting results
     self_results, other_results = _split_results(state["result_pool"]["to_window"], model, begin, model_info)
@@ -493,17 +665,17 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
             candidate_sets = new_candidate_sets
 
     # find parametric similarity score for the candidate set of records
-    candidate_sets = _compute_parametric_similarity(candidate_sets)
+    candidate_sets = wm_utils.compute_parametric_similarity(candidate_sets, model, MONGO_CLIENT)
 
     # find provenance score for the candidate sets of records
-    temporal_context = {"begin": start, "end": min(start + input_window, simulation_end)}
+    temporal_context = {"begin": begin, "end": min(begin + input_window, simulation_end)}
     candidate_sets = generate_provenance_score(candidate_sets, temporal_context)
 
     # remove the DSARs of MY_MODEL if not Stateful
     if not model_info["stateful"] and state_candidates is not None:
         for each_candidate in candidate_sets:
             record_set = each_candidate[0]
-            new_record_set = [record_id for record_id in record_set if DSAR_DB.find_one({"_id": record_id})["metadata"]["model_type"] != MY_MODEL]
+            new_record_set = [record_id for record_id in record_set if DSIR_DB.find_one({"_id": record_id})["metadata"]["model_type"] != model]
             each_candidate[0] = new_record_set
         # End of loop
 
@@ -526,10 +698,10 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
             metrics.extend(hard_score)
         hmean = scipy_stats.hmean(metrics)
         candidate_sets[index].append(hmean)
+    # End of loop
 
     # sort the candidates by their weighted compatibility
     candidate_sets.sort(key=lambda each: each[3], reverse=True)
-    new_state = None
 
     history_list = list()
     parameter_list = list()
@@ -547,7 +719,7 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
         # send multiple candidates to the aligner
         K = int(WINDOWING_POLICY["wm_fanout"])
         interest_parameters = {param_dict["parameter"]: param_dict["strategy"] for param_dict in DS_CONFIG["exploration"].values()}
-        candidate_sets = Skyline.find_top_k_candidates(candidate_sets, K, interest_parameters, MODEL_INFO, MONGO_CLIENT)
+        candidate_sets = Skyline.find_top_k_candidates(candidate_sets, K, interest_parameters, model_info, MONGO_CLIENT)
         for each_candidate in candidate_sets:
             dsir_list = each_candidate[0]
             state["result_pool"]["to_align"].append(dsir_list)
@@ -555,7 +727,7 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
             history = ProvenanceCriteria.create_history_from_windowing_set(dsir_list, temporal_context)
             # Writing history to DB
             history_id = HISTORY_DB.insert_one({"history": history, "workflow_id": DS_CONFIG["workflow_id"]})
-            history_list.append({"history_id": history_id.inserted_id, "upstream_dsar": each_candidate[0]})
+            history_list.append({"history_id": history_id.inserted_id, "upstream_dsir": each_candidate[0]})
         # End of loop
 
     print("All candidates generated.")
@@ -563,8 +735,8 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
     MONGO_CLIENT["ds_config"].collection.save(DS_CONFIG)
     # go to alignment manager
     # If WM receives more than one model, candidates from different models will be stored in the same candidate list.
-    new_state["subactor_state"] = "AlignmentManager"
-    new_state["history"] = history_list
+    state["subactor_state"] = "AlignmentManager"
+    state["history"] = history_list
     KEPLER_DB.save(state)
     return
 
@@ -573,7 +745,7 @@ def execute_model(model, begin, output_end, model_info):
     _generate_windowing_sets(model, begin, output_end, model_info)
     _perform_alignment(model, begin, output_end, model_info)
     _sample_values(model, begin, output_end, model_info)
-    _perform_postsynchronization(model, model_info)
+    _perform_postsynchronization(model, begin, output_end, model_info)
     _perform_output(model, model_info)
     return
 
@@ -581,27 +753,31 @@ def execute_model(model, begin, output_end, model_info):
 def simulate_model(model):
     global DS_CONFIG
 
-    model_info = utils.access_model_by_name(DS_CONFIG, model)
+    model_info = ds_utils.access_model_by_name(DS_CONFIG, model)
     simulation_begin = DS_CONFIG["simulation_context"]["temporal"]["begin"]
     simulation_end = DS_CONFIG["simulation_context"]["temporal"]["end"]
     begin = simulation_begin
     output_window = model_info["temporal"]["output_window"]
-    shift_size = model_info["temporal"]["shift"]
+    shift_size = model_info["temporal"]["shift_size"]
     while begin < simulation_end:
         output_end = begin + output_window
         execute_model(model, begin, output_end, model_info)
         # TODO: Shift subtracted here
+        print(model + " compeleted with begin " + str(begin) + " and end " + str(output_end))
         begin = begin + output_window - shift_size
 
 
 def main():
-    global DS_CONFIG
+    global DS_CONFIG, MONGO_CLIENT
 
+    MONGO_CLIENT = ds_utils.connect_to_mongo()
     _connect_to_mongo()
-    # TODO: Hardcoded Here
-    model_list = ["hurricane", "flood"]
+    model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+    # TODO: Hardcoded here
+    model_list = ["flood"]
     for model in model_list:
         simulate_model(model)
+    ds_utils.disconnect_from_mongo()
 
 
 if __name__ == '__main__':

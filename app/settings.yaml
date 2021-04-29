@@ -1,0 +1,198 @@
+cluster_type: OpenStack
+compatibility_settings:
+  compatibility_strategy: timeline
+  parametric_mode: union
+  timeline:
+    similarity_threshold: 0.5
+    spatial:
+      distance: 1000
+      no_of_regions: 5
+      threshold: 0.5
+    weight:
+      scale: 1
+      threshold: 0.5
+model_settings:
+  model_0:
+    am_settings:
+      am_gap: ignore
+      am_overlap: ignore
+    downstream_models:
+      downstream_model_0: flood
+    instance_count: 2
+    name: hurricane
+    output_variables:
+      variable_0: rain
+      variable_1: u
+      variable_2: v
+    psm_settings:
+      psm_candidates: 1
+      psm_parametric_compat: true
+      psm_strategy: cluster
+      psm_timeline_compat: true
+    run_command: python3 /home/cc/hurricane/simple_hurricane_modeller.py
+    sampled_variables:
+      variable_0:
+        bin_size: 20
+        lower_bound: 10
+        name: wind_speed
+        upper_bound: 100
+      variable_1:
+        bin_size: 0.2
+        lower_bound: 0.3
+        name: humidity
+        upper_bound: 0.95
+    sm_settings:
+      sm_fanout: 2
+    spatial:
+      input_x_res: 0.1
+      input_y_res: 0.1
+      output_x_res: 0.1
+      output_y_res: 0.1
+    stateful: false
+    temporal:
+      input_window: 172780
+      output_window: 172780
+      shift_size: 0
+    wm_settings:
+      wm_fanout: 1
+      wm_strategy: compatible
+  model_1:
+    am_settings:
+      am_gap: ignore
+      am_overlap: ignore
+    input_variables:
+      variable_0: rain
+    instance_count: 2
+    name: flood
+    output_variables:
+      variable_0: water_depth
+    psm_settings:
+      psm_candidates: 2
+      psm_parametric_compat: true
+      psm_strategy: cluster
+      psm_timeline_compat: true
+    run_command: python3 /home/cc/flood/simple_flood_modeller.py
+    sampled_variables:
+      variable_0:
+        bin_size: 0.01
+        lower_bound: 0.9
+        name: scaling_factor
+        upper_bound: 1.1
+      variable_1:
+        bin_size: 2
+        lower_bound: 0
+        name: evaporation_rate
+        upper_bound: 10
+      variable_2:
+        bin_size: 2
+        lower_bound: 0
+        name: transpiration_rate
+        upper_bound: 10
+    sm_settings:
+      sm_fanout: 2
+    spatial:
+      input_x_res: 0.1
+      input_y_res: 0.1
+      output_x_res: 0.1
+      output_y_res: 0.1
+    stateful: true
+    temporal:
+      input_window: 43200
+      output_window: 43200
+      shift_size: 0
+    wm_settings:
+      wm_fanout: 1
+      wm_strategy: compatible
+openstack_settings:
+  auth_dict:
+    access_token_type: access_token
+    auth_type: v3oidcpassword
+    auth_url: https://kvm.tacc.chameleoncloud.org:5000/v3
+    client_id: keystone-kvm-prod
+    client_secret: none
+    discovery_endpoint: https://auth.chameleoncloud.org/auth/realms/chameleon/.well-known/openid-configuration
+    identity_api_version: 3
+    identity_provider: chameleon
+    interface: public
+    password: cF5!ULQEx$*wSVX7
+    project_id: 860f2f4952ee40af911219f32ff03610
+    protocol: openid
+    region_name: KVM@TACC
+    username: hwbehren
+  auth_mode: manually set
+  flavor: m1.medium
+  image_name: CC-Ubuntu18.04
+  image_user: cc
+  local_keypair: ~/.ssh/dsworker-new-hans
+  network_name: sharednet1
+  openstack_keypair: dsworker-new-hans
+simulation_context:
+  execution_strategy: level-ordered
+  spatial:
+    bottom: 24
+    left: -87.64
+    right: -80.02
+    top: 31
+  temporal:
+    begin: 1602010674
+    end: 1602182780
+viz_layers:
+  layer_0:
+    icon: fas fa-wind
+    model: hurricane
+    name: Wind
+    opacity: 1
+    options:
+      min_val: 0.2
+      u: u
+      v: v
+    resolution: 0.1
+    type: vector
+  layer_1:
+    icon: fas fa-cloud-rain
+    model: hurricane
+    name: Rain
+    opacity: 0.6
+    options:
+      color_list:
+        color_0: '#008000'
+      max_val: 20
+      min_val: 0.2
+      num_buckets: 10
+      variable_name: rain
+    resolution: 0.1
+    type: square_map
+  layer_2:
+    icon: fas fa-water
+    model: flood
+    name: Flooding
+    opacity: 0.3
+    options:
+      color_list:
+        color_0: '#000DBF'
+        color_1: '#1A00C3'
+        color_2: '#4400C7'
+        color_3: '#6F00CB'
+        color_4: '#9C00CF'
+        color_5: '#CB00D4'
+        color_6: '#D800B4'
+        color_7: '#DC008A'
+        color_8: '#E0005F'
+        color_9: '#E50031'
+      max_val: 20
+      min_val: 0.1
+      variable_name: water_depth
+    resolution: 0.1
+    type: heat_map
+viz_settings:
+  date:
+    begin: 1602010674
+    end: 1602182780
+  map:
+    bottom: 24
+    left: -87.64
+    right: -80.02
+    top: 31
+    zoom: 7
+  mongo:
+    api_port: 3000
