@@ -18,7 +18,7 @@ def main():
     timelines = timeline.get_top_k_timelines(4)
     print(timelines)
     # print("\n")
-    # print(timelines[1])
+    # print( imelines[1])
     # print(timeline.format_timelines_to_output([]))
     db_connect.disconnect_db()
 
