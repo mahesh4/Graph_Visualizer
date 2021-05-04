@@ -26,9 +26,7 @@ def connect_to_mongo():
     PROVENANCE_DB = MONGO_CLIENT["ds_provenance"]["provenance"]
     HISTORY_DB = MONGO_CLIENT["ds_provenance"]["history"]
     DSIR_DB = MONGO_CLIENT["ds_results"]["dsir"]
-    # model = ds_utils.get_model()
-    # TODO:Hardcoded here
-    model = "flood"
+    model = ds_utils.get_model()
     MODEL_INFO = ds_utils.access_model_by_name(CONFIG, model)
 
 

@@ -103,7 +103,8 @@ def _create_provenance(target_dsir, model):
     history_id_set = set()
     for job in job_list:
         input_dsirs = job["input_dsir"]  # These are DSIRs created by AM_resampling
-        upstream_dsirs = [upstream_dsir_id for input_dsir_id in input_dsirs for upstream_dsir_id in DSIR_DB.find_one({"_id": input_dsir_id})["parents"]]
+        upstream_dsirs = [upstream_dsir_id for input_dsir_id in input_dsirs for upstream_dsir_id in
+                          DSIR_DB.find_one({"_id": input_dsir_id})["parents"]]
         for history in state["history"]:
             if set(upstream_dsirs) == set(history["upstream_dsir"]):
                 history_id_set.add(history["history_id"])
@@ -259,6 +260,8 @@ def _perform_postsynchronization(model, begin, output_end, model_info):
                 DSIR_DB.save(dsir)
             # End of loop
 
+            # creating provenance
+            _create_provenance(new_dsir, model)
         # End of loop
     else:
         raise ValueError(f"Unknown aggregation strategy: {aggregation_strategy}")
@@ -554,8 +557,9 @@ def _create_dsir(model, start, end, shift_size, output_window, created_by):
     new_dsir = dict()
     new_dsir["_id"] = bson.objectid.ObjectId()
     new_dsir["workflow_id"] = DS_CONFIG['workflow_id']
-    new_dsir["metadata"] = {"temporal": {"begin": start, "end": end, "window_size": output_window, "shift_size": shift_size, "timestamp_list": list()},
-                            "model_type": model}
+    new_dsir["metadata"] = {
+        "temporal": {"begin": start, "end": end, "window_size": output_window, "shift_size": shift_size, "timestamp_list": list()},
+        "model_type": model}
     new_dsir["is_aggregated"] = False
     new_dsir["do_visualize"] = False
     # TODO: Need to change here
@@ -584,13 +588,15 @@ def _split_results(all_results, model, begin, model_info):
     self, other = [], []
     shift_size = model_info["temporal"]["shift_size"]
     input_window = model_info["temporal"]["input_window"]
+    input_end = begin - shift_size + input_window
     for record_id in all_results:
         record = DSIR_DB.find_one({"_id": record_id})
         # removing data which are not compatible for current window
         # TODO: Need to evaluate here
         if record["metadata"]["model_type"] == model and record["metadata"]["temporal"]["end"] == begin + shift_size:
             self.append(record_id)
-        elif begin <= record["metadata"]["temporal"]["end"] or record["metadata"]["temporal"]["end"] >= begin + input_window:
+        elif (begin <= record["metadata"]["temporal"]["begin"] < input_end) or (begin < record["metadata"]["temporal"]["end"] <= input_end) or \
+                (record["metadata"]["temporal"]["begin"] <= begin and record["metadata"]["temporal"]["end"] >= input_end):
             other.append(record_id)
         else:
             print("not compatible record for current execution: {0}".format(record_id))
@@ -761,6 +767,7 @@ def simulate_model(model):
     shift_size = model_info["temporal"]["shift_size"]
     while begin < simulation_end:
         output_end = begin + output_window
+        ds_utils.set_model(model)
         execute_model(model, begin, output_end, model_info)
         # TODO: Shift subtracted here
         print(model + " compeleted with begin " + str(begin) + " and end " + str(output_end))
@@ -773,8 +780,8 @@ def main():
     MONGO_CLIENT = ds_utils.connect_to_mongo()
     _connect_to_mongo()
     model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    # TODO: Hardcoded here
-    model_list = ["flood"]
+    print(model_list)
+    # model_list = ["human_mobility"]
     for model in model_list:
         simulate_model(model)
     ds_utils.disconnect_from_mongo()
