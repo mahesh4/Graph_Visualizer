@@ -349,8 +349,36 @@ def _perform_alignment(model, begin, output_end, model_info):
 
 
 def _power_set(input_iterable: collections.Iterable):
-    s = list(input_iterable)
-    return list(itertools.chain.from_iterable(itertools.combinations(s, r) for r in range(len(s) + 1)))
+    global DSIR_DB
+
+    record_list = list(input_iterable)
+    model_record_dict = defaultdict(dict)
+    iter_list = []
+    # splitting records by model
+    for record_id in record_list:
+        record = DSIR_DB.find_one({"_id": record_id})
+        begin = record["metadata"]["temporal"]["begin"]
+        if begin in model_record_dict[record["metadata"]["model_type"]]:
+            model_record_dict[record["metadata"]["model_type"]][begin].append(str(record["_id"]))
+        else:
+            model_record_dict[record["metadata"]["model_type"]][begin] = [str(record["_id"])]
+    # End of loop
+    for model_type, record_dict in model_record_dict.items():
+        # computing factor
+        if model_type == "undefined":
+            iter_list.extend(list(record_dict.values()))
+        else:
+            upstream_model_info = ds_utils.access_model_by_name(DS_CONFIG, model_type)
+            l = len(record_list)
+            time_list = list(record_dict.keys())
+            instance_list = list()
+            time_index_power_set = list(itertools.chain.from_iterable(itertools.combinations(time_list, r) for r in range(1, l + 1)))
+            for time_index_sublist in time_index_power_set:
+                record_sub_list = [record_dict[time] for time in time_index_sublist]
+                instance_list.extend(list(itertools.product(*record_sub_list)))
+            iter_list.append(instance_list)
+    # End of loop
+    return itertools.product(*iter_list)
 
 
 def _check_compatibility_temporal(candidate_sets, begin, model_info):
@@ -643,13 +671,14 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
     if state_candidates is not None and len(state_candidates) == 0:
         raise Exception("[ERROR] Stateful model expected previous window data, but didn't receive it!")
 
-    raw_powerset = _power_set(other_results)
+    raw_powerset = list(_power_set(other_results))
     input_powerset = []
     for entry in raw_powerset:
         metadata = dict()
-        input_powerset.append([entry, metadata])
+        input_powerset.append([[ObjectId(_id) for _id_list in entry for _id in _id_list], metadata])
     # End of loop
 
+    print('no of candidates generated were: ' + str(len(input_powerset)))
     # performing temporal compatibility
     candidate_sets = _check_compatibility_temporal(input_powerset, begin, model_info)
 
@@ -767,6 +796,7 @@ def simulate_model(model):
     begin = simulation_begin
     output_window = model_info["temporal"]["output_window"]
     shift_size = model_info["temporal"]["shift_size"]
+    print("----------------> starting model " + model + " <---------------------------")
     while begin < simulation_end:
         output_end = begin + output_window
         ds_utils.set_model(model)
@@ -782,7 +812,6 @@ def main():
     MONGO_CLIENT = ds_utils.connect_to_mongo()
     _connect_to_mongo()
     model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    print(model_list)
     # model_list = ["human_mobility"]
     for model in model_list:
         simulate_model(model)
