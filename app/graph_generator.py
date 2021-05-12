@@ -608,7 +608,7 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
 
     state = KEPLER_DB.find_one({"model_type": model})
     simulation_end = DS_CONFIG["simulation_context"]["temporal"]["end"]
-    is_seed = DS_CONFIG["simulation_context"]["temporal"]["begin"] == begin and "upstream_models" not in model_info
+    is_seed = DS_CONFIG["simulation_context"]["temporal"]["begin"] == begin and len(model_info["upstream_models"]) == 0
     input_window = model_info["temporal"]["input_window"]
     if is_seed:
         # TODO:Need to write logic for is_seed
@@ -669,6 +669,8 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
                 new_candidate_sets.extend(candidate_sets_cpy)
             # End of loop
             candidate_sets = new_candidate_sets
+            if len(candidate_sets) == 0:
+                candidate_sets = [[bson.objectid.ObjectId(dsir_id), {"temporal": 1, "state": 1}] for dsir_id in state_candidates]
 
     # find parametric similarity score for the candidate set of records
     candidate_sets = wm_utils.compute_parametric_similarity(candidate_sets, model, MONGO_CLIENT)

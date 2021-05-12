@@ -98,11 +98,11 @@ def find_top_k_candidates(windowing_sets, no_of_candidates, interest_parameters,
     # N = random.randint(no_of_candidates, len(windowing_sets))
     diff = abs(no_of_candidates - len(windowing_sets))
     N = no_of_candidates + int(model_info["wm_settings"]["candidates_threshold"] * diff)
-    kmediod = KMedoids(N).fit(X)
-    # pruning candidate_ws_list
-    candidate_ws_list = [candidate_ws_list[index] for index in kmediod.medoid_indices_]
+    if len(interest_parameters) > 0:
+        kmediod = KMedoids(N).fit(X)
+        # pruning candidate_ws_list
+        candidate_ws_list = [candidate_ws_list[index] for index in kmediod.medoid_indices_]
     interest_parameters["score"] = "max"
-
     return block_nested_loops_skyline(candidate_ws_list, interest_parameters, no_of_candidates)
 
 
