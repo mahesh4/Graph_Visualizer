@@ -123,9 +123,9 @@ openstack_settings:
   flavor: m1.medium
   image_name: CC-Ubuntu18.04
   image_user: cc
-  local_keypair: ~/.ssh/dsworker-new-hans
+  local_keypair: ~/.ssh/dummy
   network_name: sharednet1
-  openstack_keypair: dsworker-new-hans
+  openstack_keypair: dummy
 simulation_context:
   execution_strategy: level-ordered
   spatial:

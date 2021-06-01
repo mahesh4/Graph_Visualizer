@@ -44,7 +44,7 @@ def increase_temporal_context(model, model_info):
     current_end = float(current_model_state["temporal_context"]['end'])
     shift_size = float(model_info["temporal"]["shift_size"])
     # Update begin time
-    updated_begin = current_end - shift_size
+    updated_begin = current_end + shift_size
     KEPLER_DB.update_one({"model_type": model_info}, {"$set": {"temporal_context.begin": updated_begin}})
 
     # Update end time
@@ -621,7 +621,7 @@ def _split_results(all_results, model, begin, model_info):
         record = DSIR_DB.find_one({"_id": record_id})
         # removing data which are not compatible for current window
         # TODO: Need to evaluate here
-        if record["metadata"]["model_type"] == model and record["metadata"]["temporal"]["end"] == begin + shift_size:
+        if record["metadata"]["model_type"] == model and record["metadata"]["temporal"]["end"] == begin - shift_size:
             self.append(record_id)
         elif (begin <= record["metadata"]["temporal"]["begin"] < input_end) or (begin < record["metadata"]["temporal"]["end"] <= input_end) or \
                 (record["metadata"]["temporal"]["begin"] <= begin and record["metadata"]["temporal"]["end"] >= input_end):
@@ -699,7 +699,7 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
             # End of loop
             candidate_sets = new_candidate_sets
             if len(candidate_sets) == 0:
-                candidate_sets = [[bson.objectid.ObjectId(dsir_id), {"temporal": 1, "state": 1}] for dsir_id in state_candidates]
+                candidate_sets = [[[bson.objectid.ObjectId(dsir_id)], {"temporal": 1, "state": 1}] for dsir_id in state_candidates]
 
     # find parametric similarity score for the candidate set of records
     candidate_sets = wm_utils.compute_parametric_similarity(candidate_sets, model, MONGO_CLIENT)
@@ -751,7 +751,7 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
         history = ProvenanceCriteria.create_history_from_windowing_set(dsir_list, temporal_context)
         # Writing history to DB
         history_id = HISTORY_DB.insert_one({"history": history, "workflow_id": DS_CONFIG["workflow_id"]})
-        history_list.append({"history_id": history_id.inserted_id, "upstream_dsar": candidate_sets[0][0]})
+        history_list.append({"history_id": history_id.inserted_id, "upstream_dsir": candidate_sets[0][0]})
     else:
         # send multiple candidates to the aligner
         K = int(WINDOWING_POLICY["wm_fanout"])
@@ -787,23 +787,68 @@ def execute_model(model, begin, output_end, model_info):
     return
 
 
+def _temporal_quantization(begin, output_window, model_info):
+    # note that this reads the CURRENT temporal window, or generates one if none exists
+    # it doesn't iterate to the next window step (that's done when the new records are saved)
+    print("Fetching current temporal window...")
+    state = KEPLER_DB.find_one({"model_type": model_info["name"]})
+    if state["temporal_context"]["begin"] != 0:
+        print("Valid temporal window found.")
+    else:
+        # There is no shift in the first window
+        print("No valid window found, building...")
+        state["temporal_context"]["begin"] = begin
+        # the "end" of a model is the end of the current window, but this is confusing and should be fixed
+        state["temporal_context"]["end"] = begin + output_window
+        KEPLER_DB.save(state)
+    return state["temporal_context"]["begin"]
+
+
+def _increase_temporal_context(begin, output_window, shift_size, model_info):
+    global DS_CONFIG, KEPLER_DB
+
+    updated_begin = begin + output_window + shift_size
+    KEPLER_DB.update_one({"model_type": model_info["name"]},
+                         {"$set": {"temporal_context.begin": updated_begin}})
+    updated_end = updated_begin + float(model_info["temporal"]['output_window'])
+    KEPLER_DB.update_one({"model_type": model_info["name"]},
+                         {"$set": {"temporal_context.end": updated_end}})
+    if updated_end >= float(DS_CONFIG["simulation_context"]["temporal"]["end"]):
+        return True
+    else:
+        return False
+
+
 def simulate_model(model):
     global DS_CONFIG
 
     model_info = ds_utils.access_model_by_name(DS_CONFIG, model)
     simulation_begin = DS_CONFIG["simulation_context"]["temporal"]["begin"]
     simulation_end = DS_CONFIG["simulation_context"]["temporal"]["end"]
-    begin = simulation_begin
+    # begin = simulation_begin
+    # begin = 1602053874
     output_window = model_info["temporal"]["output_window"]
     shift_size = model_info["temporal"]["shift_size"]
     print("----------------> starting model " + model + " <---------------------------")
-    while begin < simulation_end:
-        output_end = begin + output_window
+    # while begin < simulation_end:
+    #     output_end = begin + output_window
+    #     ds_utils.set_model(model)
+    #     execute_model(model, begin, output_end, model_info)
+    #     # TODO: Shift subtracted here
+    #     print(model + " completed with begin " + str(begin) + " and end " + str(output_end))
+    #     begin = begin + output_window - shift_size
+    terminate = False
+    while not terminate:
+        t_begin = _temporal_quantization(float(DS_CONFIG["simulation_context"]["temporal"]["begin"]),
+                                         float(model_info["temporal"]["output_window"]), model_info)
+        output_end = t_begin + output_window
         ds_utils.set_model(model)
-        execute_model(model, begin, output_end, model_info)
-        # TODO: Shift subtracted here
-        print(model + " compeleted with begin " + str(begin) + " and end " + str(output_end))
-        begin = begin + output_window - shift_size
+        print(model + " starting with begin " + str(t_begin) + " and end " + str(output_end))
+        execute_model(model, t_begin, output_end, model_info)
+        terminate = _increase_temporal_context(t_begin, float(model_info["temporal"]["output_window"]), float(model_info["temporal"]["shift_size"]), model_info)
+        print(model + " completed with begin " + str(t_begin) + " and end " + str(output_end))
+
+    print("---------------> completed " + model + " <-----------------------")
 
 
 def main():
@@ -812,7 +857,6 @@ def main():
     MONGO_CLIENT = ds_utils.connect_to_mongo()
     _connect_to_mongo()
     model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    # model_list = ["human_mobility"]
     for model in model_list:
         simulate_model(model)
     ds_utils.disconnect_from_mongo()

@@ -121,7 +121,7 @@ def block_nested_loops_skyline(windowing_sets, interest_parameters, no_of_candid
     candidate_list = list()
 
     # Base Case
-    if no_of_windowing_sets == no_of_candidates:
+    if no_of_windowing_sets <= no_of_candidates:
         return [(windowing_set[0], windowing_set[2]) for windowing_set in windowing_sets]
 
     while len(candidate_list) < no_of_candidates:

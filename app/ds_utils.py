@@ -9,7 +9,7 @@ import pymongo
 import sshtunnel
 import yaml
 
-USE_SSH: bool = True
+USE_SSH: bool = False
 MONGO_SERVER: sshtunnel.SSHTunnelForwarder = None
 MONGO_CLIENT: pymongo.MongoClient = None
 LOCAL_KEYPATH: str = None
@@ -91,7 +91,7 @@ def connect_to_mongo():
         MONGO_SERVER.start()
         MONGO_CLIENT = pymongo.MongoClient(host='localhost', port=MONGO_SERVER.local_bind_port)
     else:
-        MONGO_CLIENT = pymongo.MongoClient(host="ds_core_mongo")
+        MONGO_CLIENT = pymongo.MongoClient('localhost', 27017)
 
     return MONGO_CLIENT
 

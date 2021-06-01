@@ -7,7 +7,7 @@ import yaml
 
 LOCAL_KEYPATH: str = None
 LOCAL_USER: str = None
-USE_SSH = True
+USE_SSH = False
 
 
 BASE_DIR = pathlib.Path(__file__).parent.absolute()
@@ -28,7 +28,6 @@ class DBConnect:
         global LOCAL_KEYPATH, LOCAL_USER
         if USE_SSH:
             try:
-                # TODO: Hardcoded here
                 settings_path = "settings.yaml"
 
                 with open(settings_path, "r") as infile:
@@ -54,7 +53,6 @@ class DBConnect:
             )
             self.MONGO_CLIENT: pymongo.MongoClient = None
 
-
     def connect_db(self):
         try:
             if USE_SSH:
@@ -62,7 +60,7 @@ class DBConnect:
                 self.MONGO_SERVER.start()
                 self.MONGO_CLIENT = pymongo.MongoClient(host='localhost', port=self.MONGO_SERVER.local_bind_port)
             else:
-                self.MONGO_CLIENT = pymongo.MongoClient(host="ds_core_mongo")
+                self.MONGO_CLIENT = pymongo.MongoClient("localhost", 27017)
             print('connected')
         except Exception as e:
             print('cannot connect')
@@ -75,8 +73,9 @@ class DBConnect:
         try:
             # close mongo connection
             self.MONGO_CLIENT.close()
-            # close the SSH tunnel to the mongo server
-            self.MONGO_SERVER.close()
+            if USE_SSH:
+                # close the SSH tunnel to the mongo server
+                self.MONGO_SERVER.close()
             self.MONGO_CLIENT = None
             print("disconnected")
         except Exception as e:
