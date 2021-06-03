@@ -283,7 +283,7 @@ def _sample_values(model, begin, output_end, model_info):
     model_vars = list(model_info["sampled_variables"].values())
     to_sync = list()
     job_count = model_info["sm_settings"]["sm_fanout"]
-    for dsir_list in candidate_list:
+    for candidate_index, dsir_list in enumerate(candidate_list):
         for i in range(job_count):
             new_job = _create_job(model)
             new_job["input_dsir"] = dsir_list
@@ -295,7 +295,25 @@ def _sample_values(model, begin, output_end, model_info):
                     high = each_var["upper_bound"]
                     new_job["variables"][var_name] = round(random.uniform(low, high), 2)
                 # End of loop
-            # TODO: Need to develop provenance_sampling
+            elif sampling_strategy == "provenance":
+                prev_parameter_value_dict = DS_CONFIG["sampled_parameters"]
+                if len(prev_parameter_value_dict) == 0:
+                    for each_var in model_vars:
+                        var_name = each_var["name"]
+                        low = each_var["lower_bound"]
+                        high = each_var["upper_bound"]
+                        new_job["variables"][var_name] = round(random.uniform(low, high), 2)
+                else:
+                    for each_var in model_vars:
+                        var_name = each_var["name"]
+                        if var_name in prev_parameter_value_dict[candidate_index]:
+                            prev_value = prev_parameter_value_dict[candidate_index][var_name]
+                            new_job["variables"][var_name] = min(round(prev_value + each_var["bin_size"], 2), each_var["upper_bound"])
+                        else:
+                            low = each_var["lower_bound"]
+                            high = each_var["upper_bound"]
+                            new_job["variables"][var_name] = round(random.uniform(low, high), 2)
+
             # creating new_dsirs for job <---Execution--->
             new_dsir = _create_dsir(model, begin, output_end, shift_size, output_window, "JobGateway")
             new_dsir["metadata"]["job_id"] = new_job["_id"]

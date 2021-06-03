@@ -83,7 +83,8 @@ def translate_graph_to_ds_config(model_dict_template, simualtion_context, compat
     DS_CONFIG = {
         "simulation_context": simualtion_context,
         "compatibility_settings": compatibility_settings,
-        "model_settings": {}
+        "model_settings": {},
+        "exploration": {}
     }
     for model_no, model in enumerate(list(G.nodes())):
         model_dict = copy.deepcopy(model_dict_template)
@@ -172,7 +173,7 @@ def main():
         model_dict_template["psm_settings"]["psm_candidates"] = int(input("Enter the number of clusters to generate: "))
 
     simualation_context = {"temporal": {"begin": 1602010674, "end": 1602182780}}
-    compatibility_settings = {"compatibility_strategy": "independent", "parametric_mode": "union", "provenance_size": 108000}
+    compatibility_settings = {"compatibility_strategy": "provenance", "parametric_mode": "union", "provenance_size": 10800}
     translate_graph_to_ds_config(model_dict_template, simualation_context, compatibility_settings)
 
 
