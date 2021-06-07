@@ -1,29 +1,37 @@
 import collections
 import random
+import time
+import openpyxl
+import xlsxwriter
 import bson
 import pymongo
 from bson.objectid import ObjectId
-from collections import defaultdict, OrderedDict
-from itertools import chain, combinations
+from collections import defaultdict
 from sklearn.cluster import SpectralClustering
 import itertools
-import math
 import copy
 import numpy
 from scipy import stats as scipy_stats
+import networkx as nx
+import pandas as pd
+
 from app import ds_utils
-from app.db_connect import DBConnect
 from app import ProvenanceCriteria
 from app import wm_utils
 from app import Skyline
+from app.timeline_visualizer.model_graph import ModelGraph
+from app.timeline_visualizer.timelines import Timelines
 
 DS_CONFIG: dict = dict()
-MONGO_CLIENT = None
+MONGO_CLIENT: pymongo.MongoClient = None
 KEPLER_DB: pymongo.collection.Collection = None
 DSIR_DB: pymongo.collection.Collection = None
 JOBS_DB: pymongo.collection.Collection = None
 HISTORY_DB: pymongo.collection.Collection = None
 DB_PROVENANCE: pymongo.collection.Collection = None
+PURGE = True
+global_list = list()
+completion_list = list()
 
 
 def _connect_to_mongo():
@@ -134,7 +142,7 @@ def _perform_clustering(affinity_matrix, no_of_clusters, topK=5):
     eigenvalues, eigenvectors = numpy.linalg.eig(affinity_matrix)
 
     diff = numpy.round(numpy.absolute(numpy.diff(eigenvalues)), 4)
-    print(numpy.where(diff > 0)[0])
+    # print(numpy.where(diff > 0)[0])
     if len(numpy.where(diff > 0)[0]) == 0:
         nb_clusters = affinity_matrix.shape[0]
     else:
@@ -644,8 +652,8 @@ def _split_results(all_results, model, begin, model_info):
         elif (begin <= record["metadata"]["temporal"]["begin"] < input_end) or (begin < record["metadata"]["temporal"]["end"] <= input_end) or \
                 (record["metadata"]["temporal"]["begin"] <= begin and record["metadata"]["temporal"]["end"] >= input_end):
             other.append(record_id)
-        else:
-            print("not compatible record for current execution: {0}".format(record_id))
+        # else:
+        # print("not compatible record for current execution: {0}".format(record_id))
     return self, other
 
 
@@ -846,15 +854,10 @@ def simulate_model(model):
     # begin = simulation_begin
     # begin = 1602053874
     output_window = model_info["temporal"]["output_window"]
+    print(model_info["temporal"])
+    input_window = model_info["temporal"]["input_window"]
     shift_size = model_info["temporal"]["shift_size"]
     print("----------------> starting model " + model + " <---------------------------")
-    # while begin < simulation_end:
-    #     output_end = begin + output_window
-    #     ds_utils.set_model(model)
-    #     execute_model(model, begin, output_end, model_info)
-    #     # TODO: Shift subtracted here
-    #     print(model + " completed with begin " + str(begin) + " and end " + str(output_end))
-    #     begin = begin + output_window - shift_size
     terminate = False
     while not terminate:
         t_begin = _temporal_quantization(float(DS_CONFIG["simulation_context"]["temporal"]["begin"]),
@@ -863,20 +866,321 @@ def simulate_model(model):
         ds_utils.set_model(model)
         print(model + " starting with begin " + str(t_begin) + " and end " + str(output_end))
         execute_model(model, t_begin, output_end, model_info)
-        terminate = _increase_temporal_context(t_begin, float(model_info["temporal"]["output_window"]), float(model_info["temporal"]["shift_size"]), model_info)
+        terminate = _increase_temporal_context(t_begin, float(model_info["temporal"]["output_window"]), float(model_info["temporal"]["shift_size"]),
+                                               model_info)
         print(model + " completed with begin " + str(t_begin) + " and end " + str(output_end))
 
     print("---------------> completed " + model + " <-----------------------")
+
+
+def _absolute(causal_depth, causal_width, causal_edges):
+    G = nx.DiGraph()
+
+    for w in range(causal_width):
+        nodes_list = [str(w) + '_' + str(d) for d in range(causal_depth)]
+        G.add_nodes_from(nodes_list)
+        if w - 1 >= 0:
+            # Linking causal-edges
+            parent = numpy.random.permutation(causal_depth)
+            for idx, l in enumerate(parent):
+                parent_id = str(w - 1) + '_' + str(l)
+                node_id = nodes_list[idx]
+                G.add_edge(parent_id, node_id)
+            # Adding the remaining causal_edges for each node
+            if causal_edges - 1 > 0:
+                for idx, node_id in enumerate(nodes_list):
+                    parent_nodes = random.sample(range(0, causal_depth - 1), causal_edges - 1)
+                    for parent_node in parent_nodes:
+                        if parent_node == parent[idx]:
+                            parent_id = str(w - 1) + '_' + str(parent_node + 1)
+                        else:
+                            parent_id = str(w - 1) + '_' + str(parent_node)
+                        G.add_edge(parent_id, node_id)
+    return G
+
+
+def generate_workflow(causal_depth, causal_width, causal_edges):
+    G = _absolute(causal_depth, causal_width, causal_edges)
+    model_dict_template = {
+        "am_settings": {
+            "am_gap": "ignore",
+            "am_overlap": "ignore"
+        },
+        "name": "",
+        "psm_settings": {
+            "psm_provenance_sim": True,
+            "psm_parametric_sim": True,
+            "psm_strategy": "cluster",
+            "psm_candidates": 4
+        },
+        "sampled_variables": {
+            "variable_0": {
+                "bin_size": 1,
+                "lower_bound": 100,
+                "upper_bound": 200,
+                "name": "_sm_var_0"
+            },
+            "variable_1": {
+                "bin_size": 0.5,
+                "lower_bound": 1,
+                "upper_bound": 10,
+                "name": "_sm_var_1"
+            },
+        },
+        "sm_settings": {
+            "sm_fanout": 5,
+        },
+        "stateful": True,
+        "temporal": {
+            "input_window": 43200,
+            "output_window": 43200,
+            "shift_size": 0
+        },
+        "wm_settings": {
+            "wm_fanout": 5,
+            "candidates_threshold": 1,
+            "wm_strategy": "least_gap"
+        },
+        "upstream_models": {},
+        "downstream_models": {}
+    }
+    simulation_context = {"temporal": {"begin": 1602010674, "end": 1602182780}}
+    compatibility_settings = {"compatibility_strategy": "provenance", "parametric_mode": "union", "provenance_size": 10800}
+    DS_CONFIG = {
+        "simulation_context": simulation_context,
+        "compatibility_settings": compatibility_settings,
+        "model_settings": {},
+        "exploration": {},
+        "sampled_parameters": {}
+    }
+    for model_no, model in enumerate(list(G.nodes())):
+        model_dict = copy.deepcopy(model_dict_template)
+        model_dict["name"] = "model_" + model
+        for idx, upstream_model in enumerate(list(G.predecessors(model))):
+            model_dict["upstream_models"]["upstream_model_" + str(idx)] = "model_" + upstream_model
+        for idx, downstream_model in enumerate(list(G.successors(model))):
+            model_dict["downstream_models"]["downstream_model_" + str(idx)] = "model_" + downstream_model
+        for sm_var_config in model_dict["sampled_variables"].values():
+            sm_var_config["name"] = "model_" + model + sm_var_config["name"]
+        DS_CONFIG["model_settings"]["model_" + str(model_no)] = model_dict
+
+    OLD_DS_CONFIG = MONGO_CLIENT["ds_config"]["collection"].find_one({})
+    if OLD_DS_CONFIG is not None:
+        DS_CONFIG["workflow_id"] = OLD_DS_CONFIG["workflow_id"]
+        MONGO_CLIENT["ds_config"]["collection"].delete_one({"_id": OLD_DS_CONFIG["_id"]})
+    MONGO_CLIENT["ds_config"]["collection"].insert_one(DS_CONFIG)
+    return
+
+
+def reset_mongo():
+    global PURGE
+
+    # load some information about the workflow
+    ds_config = MONGO_CLIENT.ds_config.collection.find_one()
+    if "workflow_id" in ds_config:
+        old_workflow_id = ds_config["workflow_id"]
+    else:
+        old_workflow_id = None
+    new_workflow_id = bson.objectid.ObjectId()
+    # store activation / deactivation times
+    if "activation_time" in ds_config.keys():
+        old_activation_time = ds_config["activation_time"]
+    else:
+        old_activation_time = "undefined"
+    time_now = time.time()
+
+    # shift to the new workflow
+    ds_config["activation_time"] = time_now
+    ds_config["workflow_id"] = new_workflow_id
+    MONGO_CLIENT.ds_config.collection.save(ds_config)
+
+    # # Store the parameters in the workflow
+    # ds_config["sampled_parameters"] = parameters
+
+    # store a snapshot of the previous configuration
+    ds_config["activation_time"] = old_activation_time
+    ds_config["deactivation_time"] = time_now
+    ds_config["_id"] = new_workflow_id  # rotate document ID only in the workflows collection
+    ds_config.pop("workflow_id", None)
+    MONGO_CLIENT.ds_config.workflows.save(ds_config)
+
+    del ds_config["sampled_parameters"]
+
+    if old_workflow_id is not None:
+        print(f"Resetting everything from workflow ID {old_workflow_id}...")
+
+    # fix the kepler state
+    kepler_state = MONGO_CLIENT.ds_state.kepler.find()
+    for model_ptr in kepler_state:
+        # temporal context
+        model_ptr["temporal_context"] = dict()
+        model_ptr["temporal_context"]["begin"] = 0
+        model_ptr["temporal_context"]["end"] = 0
+        model_ptr["temporal_context"]["window_size"] = 0
+        model_ptr["timeline"] = []
+        model_ptr["history"] = []
+
+        # subactor state
+        model_ptr["subactor_state"] = "WindowManager"
+
+        # result pools
+        for queue in model_ptr["result_pool"]:
+            model_ptr["result_pool"][queue] = []
+
+        MONGO_CLIENT.ds_state.kepler.save(model_ptr)
+
+    # fix the cluster state in mongo (WARNING: JobGateway states may still be messed up)
+    cluster_state = list(MONGO_CLIENT.ds_state.cluster.find())
+
+    # add missing instances to the cluster, if needed (and configured to do so)
+    local_model_list = dict()
+    with open("/etc/hosts", "r") as hostfile:
+        hostfile_data = hostfile.readlines()
+    for entry in hostfile_data:
+        if "ds_model" not in entry:
+            continue
+        entry = entry.replace("\t", " ")
+        entry = entry.replace("\n", "")
+        split_data = entry.split(" ")
+        ip, full_hostname = split_data[0], split_data[-1]
+        hostname = full_hostname.replace("ds_model_", "")
+        instance_num = int(hostname.split("_")[-1])
+        model_name = hostname.replace(f"_{instance_num}", "")
+        local_model_list[model_name + "_" + str(instance_num)] = {"status": "idle", "time_updated": 0.0,
+                                                                  "hostname": full_hostname,
+                                                                  "model_type": model_name,
+                                                                  "_id": bson.objectid.ObjectId(),
+                                                                  "instance": int(instance_num), "ip": ip,
+                                                                  "pool": dict.fromkeys(
+                                                                      ["running", "waiting", "fetching"], [])}
+
+    # reset the states for the instances
+    for instance_record in cluster_state:
+        instance_record["pool"] = dict.fromkeys(["running", "waiting", "fetching"], [])
+        instance_record["status"] = "idle"
+        instance_record["time_updated"] = 0
+        instance_key = instance_record["model_type"] + "_" + str(int(instance_record["instance"]))
+        local_model_list.pop(instance_key, None)
+        MONGO_CLIENT.ds_state.cluster.save(instance_record)
+    local_model_list = list(local_model_list.values())
+    if len(local_model_list) > 0:
+        MONGO_CLIENT.ds_state.cluster.insert_many(local_model_list)
+
+    if PURGE and old_workflow_id is not None:
+        print("Purging data...")
+        # purge DSFRs based on parent DSIRs under the old workflow ID
+        relevant_dsir_list = list(MONGO_CLIENT.ds_results.dsir.find(filter={"workflow_id": old_workflow_id}))
+        if len(relevant_dsir_list) == 0:
+            print("No DSIRs to remove, skipping...")
+        for each_dsir in relevant_dsir_list:
+            print(f"Removing DSFRs for DSIR {each_dsir}...")
+            MONGO_CLIENT.ds_results.dsfr.delete_many(filter={"parent": each_dsir["_id"]})
+            print(f"Removing DSIR {each_dsir} itself...")
+            MONGO_CLIENT.ds_results.dsir.delete_one(each_dsir)
+
+        # purge other records that contain workflow ID
+        print(f"Removing associated DSARs, if any...")
+        MONGO_CLIENT.ds_results.dsar.delete_many(filter={"workflow_id": old_workflow_id})
+        print(f"Removing associated Timelines, if any...")
+        MONGO_CLIENT.ds_results.timeline.delete_many(filter={"workflow_id": old_workflow_id})
+        print(f"Removing associated jobs, if any...")
+        MONGO_CLIENT.ds_results.jobs.delete_many(filter={"workflow_id": old_workflow_id})
+        print(f"Removing associated timelines, if any...")
+        MONGO_CLIENT.ds_timelines.timeline.delete_many(filter={"workflow_id": old_workflow_id})
+        print(f"Removing associated provenances and histories, if any...")
+        MONGO_CLIENT.ds_provenance.history.delete_many(filter={"workflow_id": old_workflow_id})
+        MONGO_CLIENT.ds_provenance.provenance.delete_many(filter={"workflow_id": old_workflow_id})
+        print(f"All results associated with workflow ID {old_workflow_id} have been purged.")
+        # Cleaning up model_graph database
+        MONGO_CLIENT.model_graph.node.delete_many({})
+        MONGO_CLIENT.model_graph.edge.delete_many({})
+        MONGO_CLIENT.model_graph.model_paths.delete_many({})
+        MONGO_CLIENT.model_graph.timelines.delete_many({})
+    else:
+        if old_workflow_id is not None:
+            print(f"All results associated with workflow ID {old_workflow_id} were preserved.")
+
+    print(f"Ready to run!")
+
+
+def compute_metrics(workflow_id):
+    global global_list, completion_list, MONGO_CLIENT
+
+    workflow = MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+    timelines = MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": len(workflow["model_settings"].values())})
+    start_time = workflow["start_time"]
+    end_time = workflow["end_time"]
+    timelines_order = list()
+    for timeline in timelines:
+        print(str(round((timeline["insert_time"] - start_time).total_seconds(), 2)))
+        timelines_order.append(round((timeline["insert_time"] - start_time).total_seconds(), 2))
+    # End of loop
+
+    print("total_time: " + str(round((end_time - start_time).total_seconds(), 2)))
+    completion_list.append(str(round((end_time - start_time).total_seconds(), 2)))
+    global_list.append(timelines_order)
 
 
 def main():
     global DS_CONFIG, MONGO_CLIENT
 
     MONGO_CLIENT = ds_utils.connect_to_mongo()
-    _connect_to_mongo()
-    model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    for model in model_list:
-        simulate_model(model)
+    iter = 20
+    K = 20
+    probability = 0
+    penalty = 0.5
+    max_model_path = 5
+    diversity = 7
+    causal_depth, causal_width, causal_edges = 3, 3, 2
+    # for i in range(0, iter):
+    #     generate_workflow(causal_depth, causal_width, causal_edges)
+    #     reset_mongo()
+    #     _connect_to_mongo()
+    #     model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+    #     for model in model_list:
+    #         simulate_model(model)
+    #
+    #     workflow_id = DS_CONFIG["workflow_id"]
+    #     model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+    #     model_graph.generate_model_graph()
+    #
+    #     timeline = Timelines(MONGO_CLIENT, workflow_id)
+    #     timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
+    #     compute_metrics(workflow_id)
+    #     MONGO_CLIENT["model_graph"]["model_paths"].remove({})
+    #     MONGO_CLIENT["model_graph"]["timelines"].remove({})
+    #     MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
+    # # End of loop
+
+    # b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
+    # for i, j in enumerate(global_list):
+    #     b[i][0:len(j)] = j
+    # b = numpy.transpose(numpy.array(b))
+    # print(b)
+    b = [[6.14, 6.65, 6.23, 3.19, 3.3, 3.32, 6.86, 6.28, 6.49, 7.05, 6.65, 6.36, 7.03, 8.02, 6.7, 6.19, 6.74, 7.11, 7.16, 6.45],
+        [6.14, 6.68, 6.24, 3.19, 3.31, 3.36, 6.9, 6.29, 6.5, 7.17, 6.76, 6.36, 7.04, 8.52, 6.7, 6.2, 6.75, 7.12, 7.16, 6.46],
+        [6.15, 6.95, 6.25, 3.2, 3.36, 3.39, 6.98, 6.29, 6.71, 7.41, 6.77, 6.37, 7.05, 8.57, 6.71, 6.2, 6.75, 7.15, 7.2, 6.46],
+        [6.15, 6.97, 6.26, 3.2, 3.37, 3.44, 6.99, 6.3, 6.86, 7.41, 6.8, 6.37, 7.08, 8.6, 6.71, 6.21, 6.76, 7.3, 7.25, 6.49],
+        [6.33, 6.99, 6.28, 3.28, 3.37, 3.46, 6.99, 6.3, 6.87, 7.53, 6.82, 6.38, 7.1, 8.61, 6.74, 6.34,  7.,  7.44, 7.25,  6.49],
+        [6.68, 7.68, 8.1, 3.79, 3.45, 3.96, 7.25, 6.74, 7.49, 8.52, 7.8, 7., 8.04, 9.75, 7.49, 7.29, 8.39, 8.76, 8.06, 7.14],
+        [7.34, 8.18, 8.55, 3.88, 3.96, 4.26, 7.89, 7.53, 8.41, 8.86, 8.77, 7.3, 9.1, 10.59, 7.85, 8.29, 9.19, 9.8, 9.02, 7.54],
+        [8.45, 9.04, 9.15, 4.16, 4.42, 4.44, 8.43, 8.25, 8.96, 9.37, 9.46, 8.23, 9.68, 13.25, 8.41, 8.99, 9.85, 10.2, 10.3, 8.15],
+        [9.19, 9.71, 10.11, 4.55, 5.06, 4.97, 9.3, 9.48, 10.16, 10.21, 10.37, 8.92, 10.88, 13.91, 9.26, 9.63, 10.49, 13.11, 11.16, 9.94],
+        [10.68, 10.43, 10.94, 4.73, 5.56, 5.29, 10.7, 10.66, 11.07, 10.92, 11.22, 9.58, 12.12, 15.05, 9.86, 10.21, 11.2, 14.74, 12.5, 10.71],
+        [11.38, 11.61, 11.35, 5.22, 5.91, 5.57, 11.64, 11.35, 11.77, 11.3, 12.14, 10.35, 12.64, 17.6, 10.6, 11.06, 12.02, 15.77, 13.4, 11.94],
+        [12.43, 12.51, 11.84, 5.45, 6.38, 6.22, 13.26, 13.55, 12.74, 12.7, 13.51, 10.91, 13.39, 18.27, 11.39, 13.11, 12.89, 18.2, 14.05, 13.04],
+        [13.05, 13.8, 12.68, 5.74, 6.68, 0., 13.9, 13.75, 13.75, 13.45, 14.12,  0., 14.59, 19.35, 12.45, 14.16, 13.76, 18.62, 14.96, 14.1],
+        [0., 14.58, 0., 0., 0., 0., 14.35, 0., 0., 0., 0., 0., 0., 0., 0., 0., 14.41, 19.04, 15.66, 15.3]]
+    p = pd.DataFrame(numpy.array(b), columns=list(range(0, iter)))
+    data = numpy.array(b)
+    data[data == 0] = numpy.nan
+    print(numpy.nanmean(data, axis=1))
+    print(numpy.nanvar(data, axis=1))
+    print()
+    writer = pd.ExcelWriter("metric.xlsx", engine='xlsxwriter')
+    p.to_excel(writer, sheet_name="exp-2")
+    writer.save()
+    writer.close()
     ds_utils.disconnect_from_mongo()
 
 

@@ -84,7 +84,8 @@ def translate_graph_to_ds_config(model_dict_template, simualtion_context, compat
         "simulation_context": simualtion_context,
         "compatibility_settings": compatibility_settings,
         "model_settings": {},
-        "exploration": {}
+        "exploration": {},
+        "sampled_parameters": {}
     }
     for model_no, model in enumerate(list(G.nodes())):
         model_dict = copy.deepcopy(model_dict_template)
