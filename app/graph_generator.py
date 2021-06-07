@@ -3,6 +3,8 @@ import random
 import time
 import openpyxl
 import xlsxwriter
+import sys
+import pathlib
 import bson
 import pymongo
 from bson.objectid import ObjectId
@@ -15,6 +17,8 @@ from scipy import stats as scipy_stats
 import networkx as nx
 import pandas as pd
 
+MODULES_PATH = pathlib.Path(__file__).resolve().parent.parent.absolute()
+sys.path.append(str(MODULES_PATH))
 from app import ds_utils
 from app import ProvenanceCriteria
 from app import wm_utils
@@ -1131,7 +1135,7 @@ def main():
     penalty = 0.5
     max_model_path = 5
     diversity = 7
-    causal_depth, causal_width, causal_edges = 3, 3, 1
+    causal_depth, causal_width, causal_edges = 3, 3, 3
     for i in range(0, iter):
         generate_workflow(causal_depth, causal_width, causal_edges)
         reset_mongo()
@@ -1164,7 +1168,7 @@ def main():
     print(numpy.nanvar(data, axis=1))
     print()
     writer = pd.ExcelWriter("metric.xlsx", engine='xlsxwriter')
-    p.to_excel(writer, sheet_name="exp-2")
+    p.to_excel(writer, sheet_name="exp-1")
     writer.save()
     writer.close()
     ds_utils.disconnect_from_mongo()
