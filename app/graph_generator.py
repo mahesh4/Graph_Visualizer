@@ -1125,52 +1125,38 @@ def main():
     global DS_CONFIG, MONGO_CLIENT
 
     MONGO_CLIENT = ds_utils.connect_to_mongo()
-    iter = 20
+    iter = 30
     K = 20
     probability = 0
     penalty = 0.5
     max_model_path = 5
     diversity = 7
-    causal_depth, causal_width, causal_edges = 3, 3, 2
-    # for i in range(0, iter):
-    #     generate_workflow(causal_depth, causal_width, causal_edges)
-    #     reset_mongo()
-    #     _connect_to_mongo()
-    #     model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    #     for model in model_list:
-    #         simulate_model(model)
-    #
-    #     workflow_id = DS_CONFIG["workflow_id"]
-    #     model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
-    #     model_graph.generate_model_graph()
-    #
-    #     timeline = Timelines(MONGO_CLIENT, workflow_id)
-    #     timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
-    #     compute_metrics(workflow_id)
-    #     MONGO_CLIENT["model_graph"]["model_paths"].remove({})
-    #     MONGO_CLIENT["model_graph"]["timelines"].remove({})
-    #     MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
-    # # End of loop
+    causal_depth, causal_width, causal_edges = 3, 3, 1
+    for i in range(0, iter):
+        generate_workflow(causal_depth, causal_width, causal_edges)
+        reset_mongo()
+        _connect_to_mongo()
+        model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+        for model in model_list:
+            simulate_model(model)
 
-    # b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
-    # for i, j in enumerate(global_list):
-    #     b[i][0:len(j)] = j
-    # b = numpy.transpose(numpy.array(b))
-    # print(b)
-    b = [[6.14, 6.65, 6.23, 3.19, 3.3, 3.32, 6.86, 6.28, 6.49, 7.05, 6.65, 6.36, 7.03, 8.02, 6.7, 6.19, 6.74, 7.11, 7.16, 6.45],
-        [6.14, 6.68, 6.24, 3.19, 3.31, 3.36, 6.9, 6.29, 6.5, 7.17, 6.76, 6.36, 7.04, 8.52, 6.7, 6.2, 6.75, 7.12, 7.16, 6.46],
-        [6.15, 6.95, 6.25, 3.2, 3.36, 3.39, 6.98, 6.29, 6.71, 7.41, 6.77, 6.37, 7.05, 8.57, 6.71, 6.2, 6.75, 7.15, 7.2, 6.46],
-        [6.15, 6.97, 6.26, 3.2, 3.37, 3.44, 6.99, 6.3, 6.86, 7.41, 6.8, 6.37, 7.08, 8.6, 6.71, 6.21, 6.76, 7.3, 7.25, 6.49],
-        [6.33, 6.99, 6.28, 3.28, 3.37, 3.46, 6.99, 6.3, 6.87, 7.53, 6.82, 6.38, 7.1, 8.61, 6.74, 6.34,  7.,  7.44, 7.25,  6.49],
-        [6.68, 7.68, 8.1, 3.79, 3.45, 3.96, 7.25, 6.74, 7.49, 8.52, 7.8, 7., 8.04, 9.75, 7.49, 7.29, 8.39, 8.76, 8.06, 7.14],
-        [7.34, 8.18, 8.55, 3.88, 3.96, 4.26, 7.89, 7.53, 8.41, 8.86, 8.77, 7.3, 9.1, 10.59, 7.85, 8.29, 9.19, 9.8, 9.02, 7.54],
-        [8.45, 9.04, 9.15, 4.16, 4.42, 4.44, 8.43, 8.25, 8.96, 9.37, 9.46, 8.23, 9.68, 13.25, 8.41, 8.99, 9.85, 10.2, 10.3, 8.15],
-        [9.19, 9.71, 10.11, 4.55, 5.06, 4.97, 9.3, 9.48, 10.16, 10.21, 10.37, 8.92, 10.88, 13.91, 9.26, 9.63, 10.49, 13.11, 11.16, 9.94],
-        [10.68, 10.43, 10.94, 4.73, 5.56, 5.29, 10.7, 10.66, 11.07, 10.92, 11.22, 9.58, 12.12, 15.05, 9.86, 10.21, 11.2, 14.74, 12.5, 10.71],
-        [11.38, 11.61, 11.35, 5.22, 5.91, 5.57, 11.64, 11.35, 11.77, 11.3, 12.14, 10.35, 12.64, 17.6, 10.6, 11.06, 12.02, 15.77, 13.4, 11.94],
-        [12.43, 12.51, 11.84, 5.45, 6.38, 6.22, 13.26, 13.55, 12.74, 12.7, 13.51, 10.91, 13.39, 18.27, 11.39, 13.11, 12.89, 18.2, 14.05, 13.04],
-        [13.05, 13.8, 12.68, 5.74, 6.68, 0., 13.9, 13.75, 13.75, 13.45, 14.12,  0., 14.59, 19.35, 12.45, 14.16, 13.76, 18.62, 14.96, 14.1],
-        [0., 14.58, 0., 0., 0., 0., 14.35, 0., 0., 0., 0., 0., 0., 0., 0., 0., 14.41, 19.04, 15.66, 15.3]]
+        workflow_id = DS_CONFIG["workflow_id"]
+        model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+        model_graph.generate_model_graph()
+
+        timeline = Timelines(MONGO_CLIENT, workflow_id)
+        timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
+        compute_metrics(workflow_id)
+        MONGO_CLIENT["model_graph"]["model_paths"].remove({})
+        MONGO_CLIENT["model_graph"]["timelines"].remove({})
+        MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
+    # End of loop
+
+    b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
+    for i, j in enumerate(global_list):
+        b[i][0:len(j)] = j
+    b = numpy.transpose(numpy.array(b))
+    print(b)
     p = pd.DataFrame(numpy.array(b), columns=list(range(0, iter)))
     data = numpy.array(b)
     data[data == 0] = numpy.nan
