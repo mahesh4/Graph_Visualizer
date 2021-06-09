@@ -1152,7 +1152,7 @@ def main():
     global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
     MONGO_CLIENT = ds_utils.connect_to_mongo()
-    iter = 2
+    iter = 30
     K = 20
     probability = 0
     penalty = 0.5
