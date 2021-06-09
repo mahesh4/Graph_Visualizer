@@ -17,9 +17,6 @@ from app.timeline_visualizer.function_H import parametric_similarity
 from app.timeline_visualizer.function_H import provenance_criteria
 
 
-# from timeline_visualizer.app.skyline.topK_timelines import Timeline
-
-
 class Timelines:
     def __init__(self, mongo_client, workflow_id):
         self.MONGO_CLIENT = mongo_client
@@ -97,36 +94,6 @@ class Timelines:
         except Exception as e:
             raise e
         return timelines_list
-
-    def check_set_equal(self, subset_list, set_list):
-        if len(subset_list) != len(set_list):
-            return False
-        for subset_index, subset_score, subset_model in subset_list:
-            flag = False
-            for set_index, set_score, set_model in set_list:
-                if set_index == subset_index and set_model == subset_model:
-                    flag = True
-                    break
-            # End of loop
-
-            if not flag:
-                return False
-        # End of loop
-        return True
-
-    def power_set(self, iterable, col_idx, row_idx):
-        s = list(iterable)
-        instance = s[col_idx]
-        del s[col_idx]
-        power_set = list(chain.from_iterable(combinations(s, r) for r in range(0, len(s) + 1)))
-        for idx, p_set in enumerate(power_set):
-            p_set = list(p_set)
-            p_set.append(instance)
-            power_set[idx] = p_set
-        # End of loop
-        if row_idx == 0 and col_idx > 0:
-            power_set = power_set[:-1]
-        return power_set
 
     def check_causal_edge(self, parent_dsir, dsir):
         provenenace = self.MONGO_CLIENT["ds_provenance"]["provenance"].find_one({"dsir_id": dsir["_id"]})
@@ -230,19 +197,19 @@ class Timelines:
         """
         node_collection = self.MONGO_CLIENT["model_graph"]["node"]
         model_paths = list()
+        unique_idx = 0
         # Base Case
         if self.window_count[model_type] == 1:
             terminal_node_list = node_collection.find({"node_type": "model", "model_type": model_type, "workflow_id": self.workflow_id,
                                                        "window_num": 1})
             for terminal_node in terminal_node_list:
                 # Since they don't have any internal edges, we give score as 0
-                # print('Adding model-path: ' + str([[str(terminal_node["node_id"])], 0]))
                 # inserting model-paths
                 self.MONGO_CLIENT["model_graph"]["model_paths"].insert_one(
                     {"workflow_id": self.workflow_id, "model_path": [str(terminal_node["node_id"])],
-                     "model_type": model_type, "internal_causal_edges": 0})
-                max_model_path -= 1
-                if max_model_path == 0:
+                     "model_type": model_type, "internal_causal_edges": 0, "unique_idx": unique_idx})
+                unique_idx += 1
+                if unique_idx == max_model_path:
                     break
             # End of loop
             return model_paths
@@ -250,7 +217,6 @@ class Timelines:
         # build the adjacent matrix
         adj_dict = self.construct_model_graph(model_type)
         visited_nodes = set()
-        unique_idx = 0
         while True:
             window_num = 1
             dp_dict = defaultdict(int)
@@ -271,10 +237,6 @@ class Timelines:
                                 else:
                                     dp_dict[adj_node] = dp_dict[candidate_node_id] + weight
                                     path_dict[adj_node] = [candidate_node_id, adj_node]
-                            elif adj_node in path_dict and dp_dict[candidate_node_id] > 0:
-                                path_dict[adj_node] = list(path_dict[candidate_node_id])
-                                path_dict[adj_node].append(adj_node)
-                                dp_dict[adj_node] = dp_dict[candidate_node_id] + weight
                             elif candidate_node_id in path_dict:
                                 path_dict[adj_node] = list(path_dict[candidate_node_id])
                                 path_dict[adj_node].append(adj_node)
@@ -300,7 +262,6 @@ class Timelines:
             if len([1 for _id in max_path if _id in visited_nodes]) < len(max_path):
                 # Computing internal-causal edges
                 causal_edges_count = self.compute_internal_causal_edges(max_path, model_type)
-                # print('Adding model-path: ' + str([max_path, causal_edges_count]))
                 # inserting model-paths
                 self.MONGO_CLIENT["model_graph"]["model_paths"].insert_one(
                     {"workflow_id": self.workflow_id, "model_path": max_path, "model_type": model_type,
@@ -354,7 +315,6 @@ class Timelines:
             else:
                 for fr_node in forward_nodes:
                     if str(fr_node["node_id"]) in max_path:
-                        # internal_causal_edges_count += len(set(fr_node["destination"]).intersection(set(forward_edges)))
                         internal_causal_edges_count += 1
         return internal_causal_edges_count
 
@@ -425,9 +385,7 @@ class Timelines:
             self.generate_model_paths(model_type, penalty, max_model_path)
 
         # Generating a topological_order
-        # level_ordered_models = self.MONGO_CLIENT["ds_state"]["runtime"].find_one({})["level_order"]
-        level_ordered_models = ["model_0_0", "model_0_1", "model_0_2", "model_1_0", "model_1_1", "model_1_2", "model_2_0", "model_2_1",
-                                   "model_2_2"]
+        level_ordered_models = self.MONGO_CLIENT["ds_state"]["runtime"].find_one({})["level_order"]
         joins = 0
         no_of_models = len(level_ordered_models)
         timelines_scores = list()
@@ -442,9 +400,13 @@ class Timelines:
         for model in level_ordered_models:
             model_path_count[model] = len(list(self.MONGO_CLIENT["model_graph"]["model_paths"].find({"model_type": model})))
 
+        window_count = self.MONGO_CLIENT["model_graph"]["workflows"].find_one({"workflow_id": self.workflow_id})["window_count"]
+        max_external_causal_edges = 0
         for model_id, model_config in self.DS_CONFIG["model_settings"].items():
             if "downstream_models" in model_config:
                 total_causal_pairs += len(model_config["downstream_models"])
+                for down_stream_model in model_config["downstream_models"].values():
+                    max_external_causal_edges += window_count[down_stream_model]
 
         while count < K:
             # Finding the highest ranked sub timeline
@@ -462,9 +424,10 @@ class Timelines:
                         "reused": 0,
                         "internal_causal_edges": model_path["internal_causal_edges"],
                         "external_causal_edges": 0,
-                        "heuristic_score": model_path["internal_causal_edges"] * no_of_models + 3 * total_causal_pairs,
+                        "heuristic_score": model_path["internal_causal_edges"] * no_of_models + max_external_causal_edges,
                         "causal_pairs": 0,
                         "no_of_models": 1,
+                        "total_joins": 0,
                         "model_paths": {
                             level_ordered_models[0]: {
                                 "instance_list": model_path["model_path"],
@@ -521,7 +484,7 @@ class Timelines:
                                            external_causal_edges_avg * (total_causal_pairs - candidate_sub_timeline["causal_pairs"])
                         # End of loop
                     else:
-                        heuristic_score += 3 * total_causal_pairs + internal_causal_edges_avg * len(level_ordered_models[next_model_idx + 1:])
+                        heuristic_score += max_external_causal_edges + internal_causal_edges_avg * len(level_ordered_models[next_model_idx + 1:])
 
                     new_candidate_sub_timeline = dict({
                         "_id": bson.objectid.ObjectId(),
@@ -549,6 +512,7 @@ class Timelines:
                     # End of loop
 
                     top_k_timelines.append(top_extended_timeline)
+                    top_extended_timeline["insert_time"] = datetime.now()
                     for model_type, model_path in top_extended_timeline["model_paths"].items():
                         if not visited_dict[str(model_path["_id"])]:
                             visited_dict[str(model_path["_id"])] = True
@@ -558,12 +522,12 @@ class Timelines:
                                                                                       {"$inc": {"reused": 1}})
                     # End of loop
 
-                    timelines_scores.append(top_extended_timeline["causal_edges"])
+                    # timelines_scores.append(top_extended_timeline["causal_edges"])
                     count += 1
                     # Removing, where reused is greater than diversity
                     self.MONGO_CLIENT["model_graph"]["timelines"].remove({"reused": {"$gt": diversity}, "no_of_models": {"$lt": no_of_models}})
-                    top_extended_timeline["insert_time"] = datetime.now()
                     top_extended_timeline["workflow_id"] = self.workflow_id
+                    top_extended_timeline["total_joins"] = joins
                     self.MONGO_CLIENT["model_graph"]["timelines"].insert(top_extended_timeline)
                     # cleaning up-subtrees which can't grow further
                     max_reused = diversity
@@ -580,7 +544,7 @@ class Timelines:
         self.end_time = datetime.now()
         self.MONGO_CLIENT["ds_config"]["workflows"].update({"_id": self.workflow_id}, {"$set": {"start_time": self.start_time,
                                                                                                 "end_time": self.end_time,
-                                                                                                "total_joins": joins}})
+                                                                                                }})
         # topK = Timeline(probability, self.workflow_id, self.MONGO_CLIENT)
         # topK.find_topK_skylines()
         # skyline_indices = topK.skyline_timeline_object_indices
@@ -589,3 +553,4 @@ class Timelines:
         # # Need to delete the generated timelines
         # self.MONGO_CLIENT["model_graph"]["timelines"].remove({"workflow_id": self.workflow_id})
         # return data
+        return

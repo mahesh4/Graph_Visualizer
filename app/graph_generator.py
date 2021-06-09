@@ -35,7 +35,7 @@ HISTORY_DB: pymongo.collection.Collection = None
 DB_PROVENANCE: pymongo.collection.Collection = None
 PURGE = True
 global_list = list()
-completion_list = list()
+global_joins_list = list()
 
 
 def _connect_to_mongo():
@@ -948,7 +948,7 @@ def generate_workflow(causal_depth, causal_width, causal_edges):
         "upstream_models": {},
         "downstream_models": {}
     }
-    simulation_context = {"temporal": {"begin": 1602010674, "end": 1602182780}}
+    simulation_context = {"temporal": {"begin": 1602010674, "end": 1602226675}}
     compatibility_settings = {"compatibility_strategy": "provenance", "parametric_mode": "union", "provenance_size": 10800}
     DS_CONFIG = {
         "simulation_context": simulation_context,
@@ -1021,7 +1021,6 @@ def reset_mongo():
         model_ptr["temporal_context"]["begin"] = 0
         model_ptr["temporal_context"]["end"] = 0
         model_ptr["temporal_context"]["window_size"] = 0
-        model_ptr["timeline"] = []
         model_ptr["history"] = []
 
         # subactor state
@@ -1100,6 +1099,29 @@ def reset_mongo():
         MONGO_CLIENT.model_graph.edge.delete_many({})
         MONGO_CLIENT.model_graph.model_paths.delete_many({})
         MONGO_CLIENT.model_graph.timelines.delete_many({})
+        MONGO_CLIENT.model_graph.workflows.delete_many({})
+        MONGO_CLIENT.ds_state.kepler.delete_many({})
+        # Initializing Kepler
+        for model in ds_config["model_settings"].values():
+            kepler_dict = {
+                "temporal_context": {"begin": 0, "end": 0, "window_size": 0},
+                "subactor_state": "WindowManager",
+                "result_pool": {
+                    "to_window": [],
+                    "to_align": [],
+                    "to_sample": [],
+                    "to_sync": [],
+                    "to_output": [],
+                    "to_display": []
+                },
+                "model_type": model["name"],
+                "history": []
+            }
+            MONGO_CLIENT.ds_state.kepler.insert_one(kepler_dict)
+        # End of loop
+        model_list = [model["name"] for model in ds_config["model_settings"].values()]
+        MONGO_CLIENT.ds_state.runtime.delete_many({})
+        MONGO_CLIENT.ds_state.runtime.insert_one({"level_order": model_list})
     else:
         if old_workflow_id is not None:
             print(f"All results associated with workflow ID {old_workflow_id} were preserved.")
@@ -1108,70 +1130,78 @@ def reset_mongo():
 
 
 def compute_metrics(workflow_id):
-    global global_list, completion_list, MONGO_CLIENT
+    global global_list, global_joins_list, MONGO_CLIENT
 
     workflow = MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
     timelines = MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": len(workflow["model_settings"].values())})
     start_time = workflow["start_time"]
-    end_time = workflow["end_time"]
     timelines_order = list()
+    joins_order = list()
     for timeline in timelines:
-        print(str(round((timeline["insert_time"] - start_time).total_seconds(), 2)))
+        # print(str(round((timeline["insert_time"] - start_time).total_seconds(), 2)))
         timelines_order.append(round((timeline["insert_time"] - start_time).total_seconds(), 2))
+        joins_order.append(timeline["total_joins"])
     # End of loop
 
-    print("total_time: " + str(round((end_time - start_time).total_seconds(), 2)))
-    completion_list.append(str(round((end_time - start_time).total_seconds(), 2)))
+    # print("total_time: " + str(round((end_time - start_time).total_seconds(), 2)))
     global_list.append(timelines_order)
+    global_joins_list.append(joins_order)
 
 
 def main():
-    global DS_CONFIG, MONGO_CLIENT
+    global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
     MONGO_CLIENT = ds_utils.connect_to_mongo()
-    iter = 30
+    iter = 2
     K = 20
     probability = 0
     penalty = 0.5
-    max_model_path = 5
+    max_model_path = 8
     diversity = 7
-    causal_depth, causal_width, causal_edges = 3, 3, 3
-    for i in range(0, iter):
-        generate_workflow(causal_depth, causal_width, causal_edges)
-        reset_mongo()
-        _connect_to_mongo()
-        model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-        for model in model_list:
-            simulate_model(model)
+    causal_depth, causal_width = 2, 2
+    for causal_edges in range(1, causal_depth + 1):
+        for i in range(0, iter):
+            generate_workflow(causal_depth, causal_width, causal_edges)
+            reset_mongo()
+            _connect_to_mongo()
+            model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+            for model in model_list:
+                simulate_model(model)
 
-        workflow_id = DS_CONFIG["workflow_id"]
-        model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
-        model_graph.generate_model_graph()
+            workflow_id = DS_CONFIG["workflow_id"]
+            model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+            model_graph.generate_model_graph()
 
-        timeline = Timelines(MONGO_CLIENT, workflow_id)
-        timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
-        compute_metrics(workflow_id)
-        MONGO_CLIENT["model_graph"]["model_paths"].remove({})
-        MONGO_CLIENT["model_graph"]["timelines"].remove({})
-        MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
-    # End of loop
+            timeline = Timelines(MONGO_CLIENT, workflow_id)
+            timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
+            compute_metrics(workflow_id)
+            MONGO_CLIENT["model_graph"]["model_paths"].remove({})
+            MONGO_CLIENT["model_graph"]["timelines"].remove({})
+            MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
+        # End of loop
 
-    b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
-    for i, j in enumerate(global_list):
-        b[i][0:len(j)] = j
-    b = numpy.transpose(numpy.array(b))
-    print(b)
-    p = pd.DataFrame(numpy.array(b), columns=list(range(0, iter)))
-    data = numpy.array(b)
-    data[data == 0] = numpy.nan
-    print(numpy.nanmean(data, axis=1))
-    print(numpy.nanvar(data, axis=1))
-    print()
-    writer = pd.ExcelWriter("metric.xlsx", engine='xlsxwriter')
-    p.to_excel(writer, sheet_name="exp-1")
-    writer.save()
-    writer.close()
-    ds_utils.disconnect_from_mongo()
+        # saving computational time
+        b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
+        for i, j in enumerate(global_list):
+            b[i][0:len(j)] = j
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(0, iter)))
+        writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + ".xlsx", engine='xlsxwriter')
+        p.to_excel(writer, sheet_name="compute time")
+
+        # saving total joins performed
+        b = numpy.zeros([len(global_joins_list), len(max(global_joins_list, key=lambda x: len(x)))])
+        for i, j in enumerate(global_joins_list):
+            b[i][0:len(j)] = j
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(0, iter)))
+        p.to_excel(writer, sheet_name="compute joins")
+
+        writer.save()
+        writer.close()
+        global_list = []
+        global_joins_list = []
+        ds_utils.disconnect_from_mongo()
 
 
 if __name__ == '__main__':
