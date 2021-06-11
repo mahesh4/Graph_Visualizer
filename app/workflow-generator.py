@@ -31,7 +31,8 @@ def absolute(causal_depth, causal_width, causal_edges):
             # Adding the remaining causal_edges for each node
             if causal_edges - 1 > 0:
                 for idx, node_id in enumerate(nodes_list):
-                    parent_nodes = random.sample(range(0, causal_depth - 1), causal_edges - 1)
+                    l = [*range(0, parent[idx]), *range(parent[idx] + 1, causal_depth)]
+                    parent_nodes = random.sample(l, causal_edges - 1)
                     for parent_node in parent_nodes:
                         if parent_node == parent[idx]:
                             parent_id = str(w - 1) + '_' + str(parent_node+1)
