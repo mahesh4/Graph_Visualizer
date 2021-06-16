@@ -1160,20 +1160,19 @@ def main():
     max_model_path = 8
 
     causal_depth, causal_width, causal_edges = 3, 3, 1
-    for diversity in range(1, max_model_path + 1):
+    generate_workflow(causal_depth, causal_width, causal_edges)
+    reset_mongo()
+    _connect_to_mongo()
+    model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+    for model in model_list:
+        simulate_model(model)
+    workflow_id = DS_CONFIG["workflow_id"]
+    model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+    model_graph.generate_model_graph()
+    timeline = Timelines(MONGO_CLIENT, workflow_id)
+
+    for diversity in range(1, max(max_model_path + 1, causal_depth * causal_width + 1)):
         for i in range(0, iter):
-            generate_workflow(causal_depth, causal_width, causal_edges)
-            reset_mongo()
-            _connect_to_mongo()
-            model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-            for model in model_list:
-                simulate_model(model)
-
-            workflow_id = DS_CONFIG["workflow_id"]
-            model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
-            model_graph.generate_model_graph()
-
-            timeline = Timelines(MONGO_CLIENT, workflow_id)
             timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
             compute_metrics(workflow_id)
             MONGO_CLIENT["model_graph"]["model_paths"].remove({})
@@ -1203,7 +1202,8 @@ def main():
         writer.close()
         global_list = []
         global_joins_list = []
-        ds_utils.disconnect_from_mongo()
+    # End of for
+    ds_utils.disconnect_from_mongo()
 
 
 if __name__ == '__main__':
