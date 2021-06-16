@@ -1158,9 +1158,9 @@ def main():
     probability = 0
     penalty = 0.5
     max_model_path = 8
-    diversity = 7
-    causal_depth, causal_width = 2, 2
-    for causal_edges in range(1, causal_depth + 1):
+
+    causal_depth, causal_width, causal_edges = 3, 3, 1
+    for diversity in range(1, max_model_path + 1):
         for i in range(0, iter):
             generate_workflow(causal_depth, causal_width, causal_edges)
             reset_mongo()
@@ -1187,7 +1187,8 @@ def main():
             b[i][0:len(j)] = j
         b = numpy.transpose(numpy.array(b))
         p = pd.DataFrame(b, columns=list(range(0, iter)))
-        writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + ".xlsx", engine='xlsxwriter')
+        writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + "-D" + str(diversity) + ".xlsx",
+                                engine='xlsxwriter')
         p.to_excel(writer, sheet_name="compute time")
 
         # saving total joins performed
