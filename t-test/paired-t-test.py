@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import math
-
+import time
+from datetime import datetime
 
 def paired_t_test():
     X = pd.read_excel(open('metric-5_3_1.xlsx', 'rb'), sheet_name='exp-1', index_col=0).to_numpy()
@@ -32,6 +33,13 @@ def paired_t_test():
         # print(len(diff))
 
 
+def test():
+    start = datetime.now()
+    for i in range(0, 1000):
+        time.sleep(0.4)
+    end = datetime.now()
+    print(round((end - start).total_seconds(), 2))
+
 
 if __name__ == '__main__':
-    paired_t_test()
+    test()

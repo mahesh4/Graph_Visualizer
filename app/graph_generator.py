@@ -15,6 +15,7 @@ import copy
 import numpy
 from scipy import stats as scipy_stats
 import networkx as nx
+from datetime import datetime
 import pandas as pd
 
 MODULES_PATH = pathlib.Path(__file__).resolve().parent.parent.absolute()
@@ -786,8 +787,9 @@ def _generate_windowing_sets(model, begin, output_end, model_info):
         # send multiple candidates to the aligner
         K = int(WINDOWING_POLICY["wm_fanout"])
         interest_parameters = {param_dict["parameter"]: param_dict["strategy"] for param_dict in DS_CONFIG["exploration"].values()}
-        candidate_sets = Skyline.find_top_k_candidates(candidate_sets, K, interest_parameters, model_info, MONGO_CLIENT)
-        for each_candidate in candidate_sets:
+        # candidate_sets = Skyline.find_top_k_candidates(candidate_sets, K, interest_parameters, model_info, MONGO_CLIENT)
+        candidate_sets = [(windowing_set[0], windowing_set[2]) for windowing_set in candidate_sets]
+        for each_candidate in candidate_sets[:K]:
             dsir_list = each_candidate[0]
             state["result_pool"]["to_align"].append(dsir_list)
             parameter_list.append(each_candidate[1])
@@ -915,7 +917,7 @@ def generate_workflow(causal_depth, causal_width, causal_edges):
         "psm_settings": {
             "psm_provenance_sim": True,
             "psm_parametric_sim": True,
-            "psm_strategy": "cluster",
+            "psm_strategy": "none",
             "psm_candidates": 4
         },
         "sampled_variables": {
@@ -933,7 +935,7 @@ def generate_workflow(causal_depth, causal_width, causal_edges):
             },
         },
         "sm_settings": {
-            "sm_fanout": 5,
+            "sm_fanout": 2,
         },
         "stateful": True,
         "temporal": {
@@ -942,7 +944,7 @@ def generate_workflow(causal_depth, causal_width, causal_edges):
             "shift_size": 0
         },
         "wm_settings": {
-            "wm_fanout": 5,
+            "wm_fanout": 2,
             "candidates_threshold": 1,
             "wm_strategy": "least_gap"
         },
@@ -980,6 +982,8 @@ def generate_workflow(causal_depth, causal_width, causal_edges):
 def reset_mongo():
     global PURGE
 
+    # resetting ds_utils
+    ds_utils.MODEL_MAP = None
     # load some information about the workflow
     ds_config = MONGO_CLIENT.ds_config.collection.find_one()
     if "workflow_id" in ds_config:
@@ -1140,44 +1144,60 @@ def compute_metrics(workflow_id):
     joins_order = list()
     for timeline in timelines:
         # print(str(round((timeline["insert_time"] - start_time).total_seconds(), 2)))
-        timelines_order.append(round((timeline["insert_time"] - start_time).total_seconds(), 2))
+        timelines_order.append((timeline["insert_time"] - start_time).total_seconds())
         joins_order.append(timeline["total_joins"])
     # End of loop
 
-    # print("total_time: " + str(round((end_time - start_time).total_seconds(), 2)))
+    # print("total_time: " + str(round((end_tÎime - start_time).total_seconds(), 2)))
     global_list.append(timelines_order)
     global_joins_list.append(joins_order)
 
 
-def main():
+def find_accuracy(no_of_models, K):
+    global DS_CONFIG, MONGO_CLIENT
+    timelines_topK_joins = MONGO_CLIENT["model_graph"]["topK_joins"].find({})
+    timelines_A_star_topology = MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": no_of_models})
+    joins_topK_group = defaultdict(int)
+    topology_topK_group = defaultdict(int)
+    for timeline in timelines_topK_joins:
+        joins_topK_group[timeline["causal_edges"]] += 1
+    for timeline in timelines_A_star_topology:
+        topology_topK_group[timeline["causal_edges"]] += 1
+
+    print(joins_topK_group)
+    print(topology_topK_group)
+    misses = 0
+    for score, freq in joins_topK_group.items():
+        if freq - topology_topK_group[score] > 0:
+            misses += freq - topology_topK_group[score]
+        else:
+            misses += topology_topK_group[score] - freq
+
+    print(round((K - misses) / K, 2))
+
+
+def simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, max_model_path, homogeneity):
     global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
     MONGO_CLIENT = ds_utils.connect_to_mongo()
-    iter = 30
-    K = 20
-    probability = 0
-    penalty = 0.5
-    max_model_path = 8
-
-    causal_depth, causal_width, causal_edges = 3, 3, 1
-    generate_workflow(causal_depth, causal_width, causal_edges)
-    reset_mongo()
-    _connect_to_mongo()
-    model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
-    for model in model_list:
-        simulate_model(model)
-    workflow_id = DS_CONFIG["workflow_id"]
-    model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
-    model_graph.generate_model_graph()
-    timeline = Timelines(MONGO_CLIENT, workflow_id)
-
-    for diversity in range(1, max(max_model_path + 1, causal_depth * causal_width + 1)):
+    for causal_edges in range(1, const_causal_width + 1):
         for i in range(0, iter):
-            timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
+            # Resetting and generating a new workflow
+            generate_workflow(const_causal_width, const_causal_depth, causal_edges)
+            reset_mongo()
+            _connect_to_mongo()
+            # Executing the models
+            model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+            for model in model_list:
+                simulate_model(model)
+
+            workflow_id = DS_CONFIG["workflow_id"]
+            model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+            model_graph.generate_model_graph()
+            timeline = Timelines(MONGO_CLIENT, workflow_id)
+            timeline.generate_model_paths_all(penalty, max_model_path)
+            timeline.generate_timelines_via_A_star_topology(K, homogeneity)
             compute_metrics(workflow_id)
-            MONGO_CLIENT["model_graph"]["model_paths"].remove({})
-            MONGO_CLIENT["model_graph"]["timelines"].remove({})
-            MONGO_CLIENT["model_graph"]["causal_pairs"].remove({})
         # End of loop
 
         # saving computational time
@@ -1185,8 +1205,9 @@ def main():
         for i, j in enumerate(global_list):
             b[i][0:len(j)] = j
         b = numpy.transpose(numpy.array(b))
-        p = pd.DataFrame(b, columns=list(range(0, iter)))
-        writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + "-D" + str(diversity) + ".xlsx",
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+        writer = pd.ExcelWriter("metric" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(causal_edges) + "-D" + str(
+            homogeneity) + ".xlsx",
                                 engine='xlsxwriter')
         p.to_excel(writer, sheet_name="compute time")
 
@@ -1195,15 +1216,84 @@ def main():
         for i, j in enumerate(global_joins_list):
             b[i][0:len(j)] = j
         b = numpy.transpose(numpy.array(b))
-        p = pd.DataFrame(b, columns=list(range(0, iter)))
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
         p.to_excel(writer, sheet_name="compute joins")
 
         writer.save()
         writer.close()
         global_list = []
         global_joins_list = []
-    # End of for
+    # End of loop
     ds_utils.disconnect_from_mongo()
+
+
+def main():
+    global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
+
+    iter = 30
+    K = 20
+    penalty = 0.5
+    max_model_path = 8
+    const_causal_width = 2
+    # const_causal_edges = 1
+    const_causal_depth = 7
+    homogeneity = 7
+    simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, max_model_path, homogeneity)
+
+
+    # timeline.generate_model_paths_all(penalty, max_model_path)
+    # timeline.generate_timelines_via_A_star(K, 4)
+    # timeline.generate_timelines_via_joins(K, 4)
+    # for diversity in range(1, max(max_model_path + 1, causal_depth * causal_width + 1)):
+    #     for i in range(0, iter):
+    #         timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
+
+
+        # End of loop
+
+        # # saving computational time
+        # b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
+        # for i, j in enumerate(global_list):
+        #     b[i][0:len(j)] = j
+        # b = numpy.transpose(numpy.array(b))
+        # p = pd.DataFrame(b, columns=list(range(0, iter)))
+        # writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + "-D" + str(diversity) + ".xlsx",
+        #                         engine='xlsxwriter')
+        # p.to_excel(writer, sheet_name="compute time")
+
+        # saving total joins performed
+    #     b = numpy.zeros([len(global_joins_list), len(max(global_joins_list, key=lambda x: len(x)))])
+    #     for i, j in enumerate(global_joins_list):
+    #         b[i][0:len(j)] = j
+    #     b = numpy.transpose(numpy.array(b))
+    #     p = pd.DataFrame(b, columns=list(range(0, iter)))
+    #     p.to_excel(writer, sheet_name="compute joins")
+    #
+    #     writer.save()
+    #     writer.close()
+    #     global_list = []
+    #     global_joins_list = []
+    # End of for
+    # ds_utils.disconnect_from_mongo()
+
+    # Check correctness of timelines
+    # timelines_d_6 = list(MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": 6}))
+    # timelines_d_7 = list(MONGO_CLIENT["model_graph"]["timelines-6"].find({}))
+    # i = 0
+    # match = 0
+    # while i < len(timelines_d_6):
+    #     count = 0
+    #     for model_type in timelines_d_6[i]["model_paths"].keys():
+    #         if str(timelines_d_6[i]["model_paths"][model_type]["_id"]) == str(timelines_d_7[i]["model_paths"][model_type]["_id"]):
+    #             count += 1
+    #     if count == 6:
+    #         match += 1
+    #     else:
+    #         print(timelines_d_6[i]["_id"], timelines_d_7[i]["_id"])
+    #     i += 1
+    # End of loop
+
+    # print(match)
 
 
 if __name__ == '__main__':
