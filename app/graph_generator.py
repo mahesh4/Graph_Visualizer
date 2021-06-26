@@ -17,6 +17,7 @@ from scipy import stats as scipy_stats
 import networkx as nx
 from datetime import datetime
 import pandas as pd
+import math
 
 MODULES_PATH = pathlib.Path(__file__).resolve().parent.parent.absolute()
 sys.path.append(str(MODULES_PATH))
@@ -37,7 +38,8 @@ DB_PROVENANCE: pymongo.collection.Collection = None
 PURGE = True
 global_list = list()
 global_joins_list = list()
-
+max_idcg = 0
+timeline_idx_scores = list()
 
 def _connect_to_mongo():
     global DS_CONFIG, DSIR_DB, MONGO_CLIENT, KEPLER_DB, JOBS_DB, HISTORY_DB, DB_PROVENANCE
@@ -1105,6 +1107,8 @@ def reset_mongo():
         MONGO_CLIENT.model_graph.model_paths.delete_many({})
         MONGO_CLIENT.model_graph.timelines.delete_many({})
         MONGO_CLIENT.model_graph.workflows.delete_many({})
+        MONGO_CLIENT.model_graph.timelines_all.delete_many({})
+        MONGO_CLIENT.model_graph.topK_joins.delete_many({})
         MONGO_CLIENT.ds_state.kepler.delete_many({})
         # Initializing Kepler
         for model in ds_config["model_settings"].values():
@@ -1126,7 +1130,21 @@ def reset_mongo():
         # End of loop
         model_list = [model["name"] for model in ds_config["model_settings"].values()]
         MONGO_CLIENT.ds_state.runtime.delete_many({})
-        MONGO_CLIENT.ds_state.runtime.insert_one({"level_order": model_list})
+        # Generating depth order
+        G = nx.DiGraph()
+        for model in ds_config["model_settings"].values():
+            if "upstream_models" in model:
+                if len(model["upstream_models"].values()) > 0:
+                    for up_model_name in model["upstream_models"].values():
+                        G.add_edge(up_model_name, model["name"])
+                else:
+                    G.add_edge("source", model["name"])
+
+        dfs_edges = list(nx.dfs_edges(G, source="source"))
+        dfs_order = [edge[1] for edge in dfs_edges]
+        if len(model_list) == len(dfs_order):
+            MONGO_CLIENT.ds_state.runtime.insert_one({"level_order": model_list, "dfs_order": list(dfs_order)})
+
     else:
         if old_workflow_id is not None:
             print(f"All results associated with workflow ID {old_workflow_id} were preserved.")
@@ -1143,37 +1161,191 @@ def compute_metrics(workflow_id):
     timelines_order = list()
     joins_order = list()
     for timeline in timelines:
-        # print(str(round((timeline["insert_time"] - start_time).total_seconds(), 2)))
         timelines_order.append((timeline["insert_time"] - start_time).total_seconds())
         joins_order.append(timeline["total_joins"])
     # End of loop
 
-    # print("total_time: " + str(round((end_tÎime - start_time).total_seconds(), 2)))
     global_list.append(timelines_order)
     global_joins_list.append(joins_order)
 
 
-def find_accuracy(no_of_models, K):
-    global DS_CONFIG, MONGO_CLIENT
-    timelines_topK_joins = MONGO_CLIENT["model_graph"]["topK_joins"].find({})
-    timelines_A_star_topology = MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": no_of_models})
-    joins_topK_group = defaultdict(int)
-    topology_topK_group = defaultdict(int)
-    for timeline in timelines_topK_joins:
-        joins_topK_group[timeline["causal_edges"]] += 1
-    for timeline in timelines_A_star_topology:
-        topology_topK_group[timeline["causal_edges"]] += 1
 
-    print(joins_topK_group)
-    print(topology_topK_group)
-    misses = 0
-    for score, freq in joins_topK_group.items():
-        if freq - topology_topK_group[score] > 0:
-            misses += freq - topology_topK_group[score]
+
+
+# def find_ndcg(no_of_models, K, homo):
+#     global DS_CONFIG, MONGO_CLIENT
+#
+#
+#     timelines_A_star_topology = list(MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": no_of_models}))
+#
+#     # Computing dcg
+#     idcg = 0
+#     dcg = 0
+#     for index, timeline in enumerate(timelines_topK_joins[:K]):
+#         idcg += timeline["causal_edges"] / math.log(index + 2, 2)
+#     for index, timeline in enumerate(timelines_A_star_topology[:K]):
+#         dcg += timeline["causal_edges"] / math.log(index + 2, 2)
+#
+#     return round(dcg / idcg, 3)
+
+
+# def find_dcg_bound(timelines_list, K):
+#     dcg = 0
+#     for index, timeline in enumerate(timelines_list):
+#         dcg += timeline["causal_edges"] / math.log(index + 2, 2)
+#     for i in range(len(timelines_list) + 1, K + 1):
+#         dcg = timelines_list[i - 2]["causal_edges"] / math.log(i + 1, 2)
+#     return dcg
+
+
+def generate_timelines_via_joins_diverse(K, diversity, no_of_models):
+    global DS_CONFIG, max_idcg, timeline_idx_scores
+
+    def find_diverse_timeline_icdg(timelines_list, dcg_score, mp_in_topK, K, diversity, count, index):
+        global max_idcg, timeline_idx_scores
+
+        if count < K:
+            if dcg_score < max_idcg:
+                return
+            else:
+                max_idcg = dcg_score
+                if count == K:
+                    return
+
+                #
+                # MONGO_CLIENT["model_graph"]["topK_icdg"].insert_one({"topK": timelines_list, "dcg_score": dcg_score})
+                i = 0
+                for timeline_idx, causal_edges in timeline_idx_scores[index:-(K - 1)]:
+                    timeline = MONGO_CLIENT["model_graph"]["timelines_all"].find_one({"_id": timeline_idx})
+                    model_paths_id_set = set([str(model_path["_id"]) for model_path in timeline["model_paths"].values()])
+                    max_reused = len(mp_in_topK.intersection(model_paths_id_set))
+                    if max_reused <= diversity:
+                        new_dcg_bound = dcg_score
+                        for j in range(count, K):
+                            new_dcg_bound += timelines_list[count-1]["causal_edges"] / math.log(j + 2, 2)
+                        if new_dcg_bound > max_idcg:
+                            new_dcg_score = dcg_score + (timelines_list[count-1]["causal_edges"] / math.log(count + 2, 2))
+                            new_timelines_list = list(timelines_list)
+                            new_timelines_list.append(timeline)
+                            new_set = set(mp_in_topK)
+                            new_set = new_set.union(model_paths_id_set)
+                            find_diverse_timeline_icdg(new_timelines_list, new_dcg_score, new_set, K, diversity, count + 1, i + 1)
+                        else:
+                            break
+                    i += 1
         else:
-            misses += topology_topK_group[score] - freq
+            return
 
-    print(round((K - misses) / K, 2))
+    def causal_edges_between_model_paths(model_path1_info, model_path2_info):
+        """
+        Function to compute external causal edges between two model_paths.
+
+        @param model_path1_info: A dictionary consisting of three fields
+            model_path: A list of simulation instances which are part of the model_path
+            model_type: The model_type of the model_path
+
+        @param model_path2_info: A dictionary consisting of three fields
+            model_path: A list of simulation instances which are part of the model_path
+            model_type: The model_type of the model_path
+        """
+        model_path_1 = model_path1_info["model_path"]
+        # This belongs to upstream model
+        model_path_2 = model_path2_info["model_path"]
+        causal_edges = 0
+        psm_strategy = ds_utils.access_model_by_name(DS_CONFIG, model_path1_info["model_type"])["psm_settings"]["psm_strategy"]
+        for dsir_id in model_path_2:
+            node = MONGO_CLIENT["model_graph"]["node"].find_one({"node_id": ObjectId(dsir_id)})
+            forward_edges = node["source"]
+            forward_nodes = MONGO_CLIENT["model_graph"]["node"].find(
+                {"destination": {"$in": forward_edges}, "model_type": model_path1_info["model_type"]})
+            if psm_strategy == "cluster":
+                descendant_edges = [edge for fr_node in forward_nodes for edge in fr_node["source"]]
+                descendant_nodes = list(MONGO_CLIENT["model_graph"]["node"].find({"destination": {"$in": descendant_edges},
+                                                                                       "model_type": model_path1_info["model_type"]}))
+                for ds_node in descendant_nodes:
+                    if str(ds_node["node_id"]) in model_path_1:
+                        intermedidate_nodes = list(MONGO_CLIENT["model_graph"]["node"].find({"source": {"$in": ds_node["destination"]}}))
+                        up_edges = [up_edge for it_node in intermedidate_nodes for up_edge in it_node["destination"]]
+                        denom = len(list(MONGO_CLIENT["model_graph"]["node"].find({'source': {"$in": up_edges},
+                                                                                        "model_type": model_path2_info["model_type"]})))
+                        causal_edges += len(set(ds_node["destination"]).intersection(set(descendant_edges))) / denom
+            else:
+                for fr_node in forward_nodes:
+                    if str(fr_node["node_id"]) in model_path_1:
+                        causal_edges += 1
+        return causal_edges
+
+    cache = defaultdict(dict)
+    model_list = MONGO_CLIENT["ds_state"]["runtime"].find_one({})["level_order"]
+    model_paths_dict = defaultdict(list)
+    model_paths_dict_indices = dict()
+    causal_pairs = list()
+    total_timelines_count = 1
+    for model in model_list:
+        model_paths = list(MONGO_CLIENT["model_graph"]["model_paths"].find({"model_type": model}))
+        model_paths_dict[model] = model_paths
+        model_paths_dict_indices[model] = list(range(0, len(model_paths)))
+        model_config = ds_utils.access_model_by_name(DS_CONFIG, model)
+        causal_pairs.extend([(upstream_model, model) for upstream_model in model_config["upstream_models"].values()])
+        total_timelines_count *= len(model_paths)
+    # End of loop
+
+    timeline_idx_scores = numpy.zeros((total_timelines_count, 2))
+    for unique_idx, timeline_mp_idx in enumerate(list(itertools.product(*model_paths_dict_indices.values()))):
+        ext_causal_edges = 0
+        timeline = {str(model_list[model_idx]): model_paths_dict[model_list[model_idx]][model_path_idx] for model_idx, model_path_idx in
+                    enumerate(
+                        timeline_mp_idx)}
+        int_causal_edges = sum([model_path["internal_causal_edges"] for model_path in timeline.values()])
+        for upstream_model, model in causal_pairs:
+            key1 = timeline[upstream_model]["_id"]
+            key2 = timeline[model]["_id"]
+            if key1 not in cache or key2 not in cache[key1]:
+                cache[key1][key2] = causal_edges_between_model_paths(timeline[model], timeline[upstream_model])
+            ext_causal_edges += cache[key1][key2]
+        # End of loop
+
+        # saving the timeline
+        timeline_object = dict()
+        timeline_object["_id"] = unique_idx
+        timeline_object["internal_causal_edges"] = int_causal_edges
+        timeline_object["external_causal_edges"] = ext_causal_edges
+        timeline_object["causal_edges"] = int_causal_edges + ext_causal_edges
+        timeline_object["model_paths"] = timeline
+        MONGO_CLIENT["model_graph"]["timelines_all"].insert_one(timeline_object)
+        timeline_idx_scores[unique_idx] = [unique_idx, timeline_object["causal_edges"]]
+
+    # sorting the timelines
+    timeline_idx_scores = timeline_idx_scores[numpy.argsort(-timeline_idx_scores[:, 1])]
+    # finding timelines with diversity that has max idcg
+    max_idcg = 0
+    index = 0
+
+    if diversity >= no_of_models:
+        # finding the topK timelines
+        for timeline_idx, causal_edges in timeline_idx_scores[:K]:
+            max_idcg += causal_edges / math.log(index + 2, 2)
+            index += 1
+        return max_idcg
+
+    for timeline_idx, causal_edges in timeline_idx_scores:
+        timeline = MONGO_CLIENT["model_graph"]["timelines_all"].find_one({"_id": timeline_idx})
+        mp_in_topK = set()
+        model_paths_id_list = [str(model_path["_id"]) for model_path in timeline["model_paths"].values()]
+        mp_in_topK.update(model_paths_id_list)
+        # timelines_list, dcg_bound, mp_in_topK, K, diversity, count, index
+        dcg_bound = 0
+        for j in range(1, K):
+            dcg_bound += timeline["causal_edges"] / math.log(j + 1, 2)
+        if dcg_bound > max_idcg:
+            # timelines_list, dcg_bound, dcg_score,mp_in_topK, K, diversity, count, index
+            find_diverse_timeline_icdg([timeline], timeline["causal_edges"], mp_in_topK, K, diversity, 1, index + 1)
+        else:
+            break
+        index += 1
+
+    # End of loop
+    return max_idcg
 
 
 def simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, max_model_path, homogeneity):
@@ -1198,6 +1370,7 @@ def simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, 
             timeline.generate_model_paths_all(penalty, max_model_path)
             timeline.generate_timelines_via_A_star_topology(K, homogeneity)
             compute_metrics(workflow_id)
+
         # End of loop
 
         # saving computational time
@@ -1227,20 +1400,240 @@ def simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, 
     ds_utils.disconnect_from_mongo()
 
 
+def compute_accuracy(const_causal_depth, const_causal_width, const_causal_edges, iter, K, penalty, max_model_path):
+    global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list, global_dfs_list, global_joins_dfs_list
+
+    def compute_metrics_accuracy(workflow_id, compute_dict, joins_dict, homo):
+        global MONGO_CLIENT
+
+        workflow = MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+        timelines = MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": len(workflow["model_settings"].values())})
+        start_time = workflow["start_time"]
+        timelines_order = list()
+        joins_order = list()
+        for timeline in timelines:
+            timelines_order.append((timeline["insert_time"] - start_time).total_seconds())
+            joins_order.append(timeline["total_joins"])
+        # End of loop
+
+        compute_dict[homo].append(timelines_order)
+        joins_dict[homo].append(joins_order)
+        return compute_dict, joins_dict
+
+
+    MONGO_CLIENT = ds_utils.connect_to_mongo()
+    ACCURACY_TOPOLOGY = defaultdict(list)
+    ACCURACY_DFS = defaultdict(list)
+    ACCURACY_DFS_TIME = defaultdict(list)
+    ACCURACY_TOPOLOGY_TIME = defaultdict(list)
+    ACCURACY_NAIVE_TIME = defaultdict(list)
+    homogeneity = [2, 3, const_causal_width * const_causal_depth + 1]
+    COMPUTE_TIME_DFS = defaultdict(list)
+    JOINS_DFS = defaultdict(list)
+    COMPUTE_TIME_TOPOLOGY = defaultdict(list)
+    JOINS_TOPOLOGY = defaultdict(list)
+    for i in range(0, iter):
+        # Resetting and generating a new workflow
+        generate_workflow(const_causal_width, const_causal_depth, const_causal_edges)
+        reset_mongo()
+        _connect_to_mongo()
+
+        # Executing the models
+        model_list = [model_config["name"] for model_config in DS_CONFIG["model_settings"].values()]
+        for model in model_list:
+            simulate_model(model)
+
+        workflow_id = DS_CONFIG["workflow_id"]
+        model_graph = ModelGraph(MONGO_CLIENT, workflow_id)
+        model_graph.generate_model_graph()
+        timeline_object = Timelines(MONGO_CLIENT, workflow_id)
+        timeline_object.generate_model_paths_all(penalty, max_model_path)
+
+        for homo in homogeneity:
+            # Deleting the timelines
+            MONGO_CLIENT.model_graph.timelines.delete_many({})
+
+            timeline_object.generate_timelines_via_A_star_topology(K, homo)
+            wf = MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+            compute_time = (wf["end_time"] - wf["start_time"]).total_seconds()
+            ACCURACY_TOPOLOGY_TIME[homo].append(compute_time)
+            # Fetching the topK timelines
+            topK_timelines_topology = list(MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": const_causal_depth * const_causal_width}))
+            # Storing the results of DFS
+            COMPUTE_TIME_TOPOLOGY, JOINS_TOPOLOGY = compute_metrics_accuracy(workflow_id, COMPUTE_TIME_TOPOLOGY, JOINS_TOPOLOGY, homo)
+
+            # Deleting the timelines
+            MONGO_CLIENT.model_graph.timelines.delete_many({})
+
+            # Getting the time to generate a timeline
+            MONGO_CLIENT["model_graph"]["topK_joins"].delete_many({})
+            MONGO_CLIENT["model_graph"]["timelines_all"].delete_many({})
+            compute_time = timeline_object.generate_timelines_via_joins(K, homo)
+            MONGO_CLIENT["model_graph"]["topK_joins"].delete_many({})
+            MONGO_CLIENT["model_graph"]["timelines_all"].delete_many({})
+            ACCURACY_NAIVE_TIME[homo].append(compute_time)
+
+            timeline_object.generate_timelines_via_A_star_dfs(K, homo)
+            topK_timelines_dfs = list(MONGO_CLIENT["model_graph"]["timelines"].find({"no_of_models": const_causal_depth * const_causal_width}))
+            wf = MONGO_CLIENT["ds_config"]["workflows"].find_one({"_id": workflow_id})
+            compute_time = (wf["end_time"] - wf["start_time"]).total_seconds()
+            ACCURACY_DFS_TIME[homo].append(compute_time)
+
+            # Storing the results of DFS
+            COMPUTE_TIME_DFS, JOINS_DFS = compute_metrics_accuracy(workflow_id, COMPUTE_TIME_DFS, JOINS_DFS, homo)
+
+            max_idcg = generate_timelines_via_joins_diverse(K, homo, const_causal_width * const_causal_depth)
+
+            # computing ndcg of dfs
+            dcg_dfs = 0
+            for index, timeline in enumerate(topK_timelines_dfs[:K]):
+                dcg_dfs += timeline["causal_edges"] / math.log(index + 2, 2)
+            ndcg_dfs = dcg_dfs / max_idcg
+            ACCURACY_DFS[homo].append(ndcg_dfs)
+
+            # computing ndcg of topology
+            dcg_topologly = 0
+            for index, timeline in enumerate(topK_timelines_topology[:K]):
+                dcg_topologly += timeline["causal_edges"] / math.log(index + 2, 2)
+            ndcg_topology = dcg_topologly / max_idcg
+            ACCURACY_TOPOLOGY[homo].append(ndcg_topology)
+    # End of loop
+
+    # saving computational time
+    # b = numpy.zeros([len(global_dfs_list), len(max(global_dfs_list, key=lambda x: len(x)))])
+    # for i, j in enumerate(global_dfs_list):
+    #     b[i][0:len(j)] = j
+    # b = numpy.transpose(numpy.array(b))
+    # p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+    # writer = pd.ExcelWriter("metric-topo" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) + "-D" + str(3) +
+    #                         ".xlsx", engine='xlsxwriter')
+    # p.to_excel(writer, sheet_name="compute time")
+    #
+    # # saving total joins performed
+    # b = numpy.zeros([len(global_joins_list), len(max(global_joins_list, key=lambda x: len(x)))])
+    # for i, j in enumerate(global_joins_list):
+    #     b[i][0:len(j)] = j
+    # b = numpy.transpose(numpy.array(b))
+    # p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+    # p.to_excel(writer, sheet_name="compute joins")
+    #
+    # writer.save()
+    # writer.close()
+    # global_list = []
+    # global_joins_list = []
+
+    # writing computational time topology
+    writer = pd.ExcelWriter("metric-topology-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) +
+                            ".xlsx", engine='xlsxwriter')
+
+    writer_2 = pd.ExcelWriter("joins-topology-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) +
+                            ".xlsx", engine='xlsxwriter')
+    for homo in homogeneity:
+        b = numpy.zeros([len(COMPUTE_TIME_TOPOLOGY[homo]), len(max(COMPUTE_TIME_TOPOLOGY[homo], key=lambda x: len(x)))])
+        for i, j in enumerate(COMPUTE_TIME_TOPOLOGY[homo]):
+            b[i][0:len(j)] = j
+
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+        p.to_excel(writer, sheet_name="compute time-" + "homo-" + str(homo))
+        writer.save()
+
+        # # saving total joins performed
+        b = numpy.zeros([len(JOINS_TOPOLOGY[homo]), len(max(JOINS_TOPOLOGY[homo], key=lambda x: len(x)))])
+        for i, j in enumerate(JOINS_TOPOLOGY[homo]):
+            b[i][0:len(j)] = j
+
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+        p.to_excel(writer, sheet_name="joins-" + "homo-" + str(homo))
+        writer_2.save()
+    # End of loop
+
+    writer.close()
+    writer_2.close()
+
+    # writing computational time dfs
+    writer = pd.ExcelWriter("metric-dfs-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) +
+                            ".xlsx", engine='xlsxwriter')
+
+    writer_2 = pd.ExcelWriter("joins-dfs-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) +
+                            ".xlsx", engine='xlsxwriter')
+    for homo in homogeneity:
+        b = numpy.zeros([len(COMPUTE_TIME_DFS[homo]), len(max(COMPUTE_TIME_DFS[homo], key=lambda x: len(x)))])
+        for i, j in enumerate(COMPUTE_TIME_DFS[homo]):
+            b[i][0:len(j)] = j
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+        p.to_excel(writer, sheet_name="compute time-" + "homo-" + str(homo))
+
+        writer.save()
+        # # saving total joins performed
+        b = numpy.zeros([len(JOINS_DFS[homo]), len(max(JOINS_DFS[homo], key=lambda x: len(x)))])
+        for i, j in enumerate(JOINS_DFS[homo]):
+            b[i][0:len(j)] = j
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=list(range(1, iter + 1)))
+        p.to_excel(writer, sheet_name="joins-" + "homo-" + str(homo))
+        writer_2.save()
+    # End of loop
+
+    writer.close()
+    writer_2.close()
+
+    # saving accuracy scores
+    writer = pd.ExcelWriter("accuracy-time-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) + ".xlsx",
+                            engine='xlsxwriter')
+    for homo in homogeneity:
+        b = numpy.zeros((3, iter))
+        b[0] = ACCURACY_NAIVE_TIME[homo]
+        b[1] = ACCURACY_TOPOLOGY_TIME[homo]
+        b[2] = ACCURACY_DFS_TIME[homo]
+        b = numpy.transpose(numpy.array(b))
+        p = pd.DataFrame(b, columns=["naive", "topology", "dfs"])
+        p.to_excel(writer, sheet_name="completion time-" + "homo-" + str(homo))
+
+    writer.save()
+    writer.close()
+
+    # saving accuracy time
+    writer = pd.ExcelWriter("accuracy-" + str(const_causal_depth) + "-" + str(const_causal_width) + "-" + str(const_causal_edges) + ".xlsx",
+                            engine='xlsxwriter')
+    for homo in homogeneity:
+        b = numpy.zeros((2, iter))
+        b[0] = ACCURACY_TOPOLOGY[homo]
+        b[1] = ACCURACY_DFS[homo]
+        p = pd.DataFrame(numpy.transpose(numpy.array(b)), columns=["topology", "dfs"])
+        p.to_excel(writer, sheet_name="idcg-" + "homo-" + str(homo))
+
+    writer.save()
+    writer.close()
+
+
 def main():
     global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
     iter = 30
-    K = 20
+    K = 5
     penalty = 0.5
-    max_model_path = 8
+    max_model_path = 3
     const_causal_width = 2
-    # const_causal_edges = 1
-    const_causal_depth = 7
-    homogeneity = 7
-    simulate_workflow(const_causal_depth, const_causal_width, iter, K, penalty, max_model_path, homogeneity)
+    const_causal_edges = 2
+    const_causal_depth = 2
+    # homogeneity = 5
+    compute_accuracy(const_causal_depth, const_causal_width, const_causal_edges, iter, K, penalty, max_model_path)
 
-
+    # # testing
+    # MONGO_CLIENT = ds_utils.connect_to_mongo()
+    # topK_list = MONGO_CLIENT["model_graph"]["topK_icdg"].find({"dcg_score": 124.28253310928068})
+    # mp_top_K = set()
+    # for topK in topK_list:
+    #     for timeline in topK["topK"]:
+    #         mp_set = set([str(mp["_id"]) for mp in timeline["model_paths"].values()])
+    #         print(len(mp_set.intersection(mp_top_K)))
+    #         mp_top_K = mp_top_K.union(mp_set)
+    #     print("movning to next topK")
+    #     mp_top_K = set()
+    # ds_utils.disconnect_from_mongo()
     # timeline.generate_model_paths_all(penalty, max_model_path)
     # timeline.generate_timelines_via_A_star(K, 4)
     # timeline.generate_timelines_via_joins(K, 4)
@@ -1248,20 +1641,19 @@ def main():
     #     for i in range(0, iter):
     #         timeline.generate_timelines_via_A_star(K, probability, penalty, max_model_path, diversity)
 
+    # End of loop
 
-        # End of loop
+    # # saving computational time
+    # b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
+    # for i, j in enumerate(global_list):
+    #     b[i][0:len(j)] = j
+    # b = numpy.transpose(numpy.array(b))
+    # p = pd.DataFrame(b, columns=list(range(0, iter)))
+    # writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + "-D" + str(diversity) + ".xlsx",
+    #                         engine='xlsxwriter')
+    # p.to_excel(writer, sheet_name="compute time")
 
-        # # saving computational time
-        # b = numpy.zeros([len(global_list), len(max(global_list, key=lambda x: len(x)))])
-        # for i, j in enumerate(global_list):
-        #     b[i][0:len(j)] = j
-        # b = numpy.transpose(numpy.array(b))
-        # p = pd.DataFrame(b, columns=list(range(0, iter)))
-        # writer = pd.ExcelWriter("metric" + str(causal_depth) + "-" + str(causal_width) + "-" + str(causal_edges) + "-D" + str(diversity) + ".xlsx",
-        #                         engine='xlsxwriter')
-        # p.to_excel(writer, sheet_name="compute time")
-
-        # saving total joins performed
+    # saving total joins performed
     #     b = numpy.zeros([len(global_joins_list), len(max(global_joins_list, key=lambda x: len(x)))])
     #     for i, j in enumerate(global_joins_list):
     #         b[i][0:len(j)] = j
