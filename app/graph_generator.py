@@ -1210,7 +1210,7 @@ def generate_timelines_via_joins_diverse(K, diversity, no_of_models):
             else:
                 max_idcg = dcg_score
                 # TODO: Need to delete
-                MONGO_CLIENT["model_graph"]["topK_icdg"].insert_one({"topK": timelines_list, "dcg_score": dcg_score})
+                # MONGO_CLIENT["model_graph"]["topK_icdg"].insert_one({"topK": timelines_list, "dcg_score": dcg_score})
                 i = 0
                 for timeline_idx, causal_edges in timeline_idx_scores[index:-(K - 1)]:
                     timeline = MONGO_CLIENT["model_graph"]["timelines_all"].find_one({"_id": timeline_idx})
@@ -1609,7 +1609,7 @@ def compute_accuracy(const_causal_depth, const_causal_width, const_causal_edges,
 def main():
     global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
-    iter = 2
+    iter = 30
     K = 5
     penalty = 0.5
     max_model_path = 3
