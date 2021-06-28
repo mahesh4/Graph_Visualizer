@@ -92,6 +92,9 @@ def block_nested_loops_skyline(windowing_sets, interest_parameters, no_of_candid
             if i < no_of_windowing_sets:
                 skyline_candidate_index_list.append(i)
 
+            if len(skyline_candidate_index_list) >= no_of_candidates:
+                break
+
             i = i + 1
         # End of loop
 
