@@ -525,7 +525,20 @@ def scalability_no_of_sample_parameters(iter, N, no_of_instances):
     writer.close()
 
 
+def aggregate_results():
+    file_name = "scalability-no-of-timeline_objects.xlsx"
+    p = pd.read_excel(open(file_name, 'rb'), sheet_name='compute time p-skyline', index_col=0)
+    q = pd.read_excel(open(file_name, 'rb'), sheet_name='compute time naive', index_col=0)
+    p_mean = pd.DataFrame(np.mean(p, axis=1))
+    q_mean = pd.DataFrame(np.mean(q, axis=1))
+    writer = pd.ExcelWriter("agg_" + file_name, engine='xlsxwriter')
+    p_mean.to_excel(writer, sheet_name="compute time p-skyline")
+    q_mean.to_excel(writer, sheet_name="compute time naive")
+    writer.save()
+    writer.close()
+
 if __name__ == '__main__':
     # scalability_no_of_timeline_object(30)
     # scalability_no_of_instances_object(30, 50)
-    scalability_no_of_sample_parameters(30, 50, 10)
+    # scalability_no_of_sample_parameters(30, 50, 10)
+    aggregate_results()

@@ -1609,11 +1609,11 @@ def compute_accuracy(const_causal_depth, const_causal_width, const_causal_edges,
 def main():
     global DS_CONFIG, MONGO_CLIENT, global_joins_list, global_list
 
-    iter = 30
+    iter = 1
     K = 5
     penalty = 0.5
     max_model_path = 3
-    const_causal_width = 2
+    const_causal_width = 4
     const_causal_edges = 2
     const_causal_depth = 2
     # homogeneity = 5
